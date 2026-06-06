@@ -168,6 +168,9 @@ void Window::sdlDie() {
     ssaoBlurProg.deleteProgram();
     shadowProg.deleteProgram();
     reflectionProg.deleteProgram();
+    ssrProg.deleteProgram();
+    if (mShadowRawSampler)
+        glDeleteSamplers(1, &mShadowRawSampler);
     if (mWaterVao)
         glDeleteVertexArrays(1, &mWaterVao);
     glDeleteBuffers(1, &mWaterVbo);
@@ -251,6 +254,7 @@ void Window::initGL() {
     buildProgram(ssaoBlurProg, "./shaders/fullscreen.vert", "./shaders/ssaoBlur.frag");
     buildProgram(shadowProg, "./shaders/shadowDepth.vert", "./shaders/shadowDepth.frag");
     buildProgram(reflectionProg, "./shaders/reflection.vert", "./shaders/reflection.frag");
+    buildProgram(ssrProg, "./shaders/fullscreen.vert", "./shaders/ssr.frag");
 
     // Static sampler bindings.
     lightingProg.useProgram();
@@ -263,8 +267,22 @@ void Window::initGL() {
     glUniform1i(glGetUniformLocation(lp, "uAO"), 5);
     glUniform1i(glGetUniformLocation(lp, "uShadowMap"), 6);
     glUniform1i(glGetUniformLocation(lp, "uShadowMapFar"), 7);
+    glUniform1i(glGetUniformLocation(lp, "uShadowDepthRaw"), 8);
     glUniform1i(glGetUniformLocation(lp, "uMistNoise"), 9);
     glUniformBlockBinding(lp, glGetUniformBlockIndex(lp, "LightBlock"), 0);
+    // A no-compare sampler so unit 8 reads the near shadow map's RAW depth (PCSS blocker
+    // search), while unit 6 keeps the texture's hardware compare for the soft PCF.
+    glGenSamplers(1, &mShadowRawSampler);
+    glSamplerParameteri(mShadowRawSampler, GL_TEXTURE_COMPARE_MODE, GL_NONE);
+    glSamplerParameteri(mShadowRawSampler, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glSamplerParameteri(mShadowRawSampler, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glSamplerParameteri(mShadowRawSampler, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glSamplerParameteri(mShadowRawSampler, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+#ifdef __EMSCRIPTEN__
+    mShadowTaps = 8;
+#else
+    mShadowTaps = 12;
+#endif
 
     // SSAO: hemisphere kernel (clustered toward the surface) + a 4x4 rotation tile,
     // generated once and held in the program as constant uniform arrays.
@@ -304,6 +322,12 @@ void Window::initGL() {
     glUniform1i(glGetUniformLocation(compositeProg.getProgramID(), "uScene"), 0);
     glUniform1i(glGetUniformLocation(compositeProg.getProgramID(), "uBloom"), 1);
     glUniform1i(glGetUniformLocation(compositeProg.getProgramID(), "uGodray"), 2);
+    glUniform1i(glGetUniformLocation(compositeProg.getProgramID(), "uSSR"), 3);
+    ssrProg.useProgram();
+    glUniform1i(glGetUniformLocation(ssrProg.getProgramID(), "gPosition"), 0);
+    glUniform1i(glGetUniformLocation(ssrProg.getProgramID(), "gNormal"), 1);
+    glUniform1i(glGetUniformLocation(ssrProg.getProgramID(), "gMtlProps"), 2);
+    glUniform1i(glGetUniformLocation(ssrProg.getProgramID(), "uHdrScene"), 3);
     godrayProg.useProgram();
     glUniform1i(glGetUniformLocation(godrayProg.getProgramID(), "uHdr"), 0);
     glUniform1i(glGetUniformLocation(godrayProg.getProgramID(), "gNormal"), 1);
@@ -426,6 +450,12 @@ void Window::createFramebuffers() {
     ssaoBlurFBO.setDrawBuffers();
     ssaoBlurFBO.complete("ssaoBlurFBO");
 
+    // Half-res wet-shore SSR (HDR radiance + blend weight in alpha).
+    ssrFBO.create(aw, ah);
+    ssrFBO.addColor(GL_RGBA16F, GL_RGBA, GL_FLOAT, GL_LINEAR);
+    ssrFBO.setDrawBuffers();
+    ssrFBO.complete("ssrFBO");
+
     // Sun shadow map: a fixed-size samplable depth texture (independent of window size).
 #ifdef __EMSCRIPTEN__
     mShadowRes = 1024;
@@ -473,6 +503,7 @@ void Window::destroyFramebuffers() {
     shadowFBO.destroy();
     shadowFarFBO.destroy();
     reflectionFBO.destroy();
+    ssrFBO.destroy();
     mBloomReady = false;
 }
 
@@ -924,6 +955,14 @@ void Window::run() {
         mMistStrength = (float)std::atof(mi); // force-thicken for preview
     if (std::getenv("ILO_NOREFLECT"))
         mNoReflect = true; // A/B: analytic sky reflection only
+    if (std::getenv("ILO_NOPCSS"))
+        mNoPcss = true; // A/B: fixed-width PCF instead of contact-hardening
+    if (const char *ss = std::getenv("ILO_SUNSIZE"))
+        mShadowSunSize = (float)std::atof(ss); // exaggerate the penumbra growth
+    if (std::getenv("ILO_NOSSR"))
+        mNoSSR = true; // A/B: no wet-shore reflections
+    if (const char *sd = std::getenv("ILO_SSRDEBUG"))
+        mSSRDebug = std::atoi(sd); // 1 = SSR rgb, 2 = SSR weight
     if (const char *sd = std::getenv("ILO_SHADOWDEBUG"))
         mShadowDebug = std::atoi(sd); // 1 = grayscale shadow factor
 
@@ -1995,6 +2034,42 @@ void Window::resetGame() {
     saveSession();
 }
 
+void Window::renderSSR() {
+    // Screen-space reflections for the wet shoreline (gMtlProps.a). Runs after lighting so
+    // the wet band reflects the lit scene; the result is composited in the final pass.
+    ssrFBO.bind();
+    glViewport(0, 0, ssrFBO.w, ssrFBO.h);
+    glDisable(GL_DEPTH_TEST);
+    glDepthMask(GL_FALSE);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_BLEND);
+    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    if (!mNoSSR) {
+        ssrProg.useProgram();
+        GLuint pid = ssrProg.getProgramID();
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, gBuffer.color(0));
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, gBuffer.color(1));
+        glActiveTexture(GL_TEXTURE2);
+        glBindTexture(GL_TEXTURE_2D, gBuffer.color(3)); // gMtlProps (.a wetness)
+        glActiveTexture(GL_TEXTURE3);
+        glBindTexture(GL_TEXTURE_2D, hdrFBO.color(0));  // the lit scene
+        glm::vec3 eyeRel = mCamera.mPosition - mRenderOrigin;
+        glUniform3f(glGetUniformLocation(pid, "eyePos"), eyeRel.x, eyeRel.y, eyeRel.z);
+        glm::mat4 vpRel = projection() * mCamera.mView * glm::translate(glm::mat4(1.0f), mRenderOrigin);
+        glUniformMatrix4fv(glGetUniformLocation(pid, "uViewProjRel"), 1, GL_FALSE, glm::value_ptr(vpRel));
+        glUniform3f(glGetUniformLocation(pid, "uHorizonTint"), mSky.skyHorizon.x, mSky.skyHorizon.y, mSky.skyHorizon.z);
+        glUniform1i(glGetUniformLocation(pid, "uSSRSteps"), mSSRSteps);
+        glUniform1f(glGetUniformLocation(pid, "uSSRStride"), mSSRStride);
+        glUniform1f(glGetUniformLocation(pid, "uSSRThickness"), mSSRThickness);
+        tri.draw();
+    }
+    glActiveTexture(GL_TEXTURE0);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
 void Window::renderShadowPass() {
     // Sun-elevation / night fade — skip the whole pass at or below the horizon, where
     // uSunlight is already ~0 so there is nothing to shadow.
@@ -2316,6 +2391,9 @@ void Window::renderLightingPass() {
     glBindTexture(GL_TEXTURE_2D, shadowFBO.depth());
     glActiveTexture(GL_TEXTURE7);
     glBindTexture(GL_TEXTURE_2D, shadowFarFBO.depth());
+    glActiveTexture(GL_TEXTURE8); // near depth read RAW for the PCSS blocker search
+    glBindTexture(GL_TEXTURE_2D, shadowFBO.depth());
+    glBindSampler(8, mShadowRawSampler);
 
     // eyePos in origin-relative space (matches the G-buffer positions and lights).
     glm::vec3 eyeRel = mCamera.mPosition - mRenderOrigin;
@@ -2347,6 +2425,10 @@ void Window::renderLightingPass() {
     glUniform1f(glGetUniformLocation(pid, "uShadowTexelWorldFar"), 2.0f * mShadowRadiusFar / (float)mShadowResFar);
     glUniform1f(glGetUniformLocation(pid, "uShadowBiasFar"), 0.0018f);
     glUniform1i(glGetUniformLocation(pid, "uNoFarShadow"), mNoFarShadow ? 1 : 0);
+    // Contact-hardening (PCSS) controls (0 sun-size -> plain 3x3 PCF).
+    glUniform1f(glGetUniformLocation(pid, "uShadowSunSize"), mNoPcss ? 0.0f : mShadowSunSize);
+    glUniform1f(glGetUniformLocation(pid, "uShadowMaxPenumbra"), mShadowMaxPenumbra);
+    glUniform1i(glGetUniformLocation(pid, "uShadowTaps"), mShadowTaps);
 
     // Volumetric mist (pools in the hollows; world-locked drifting noise on unit 9).
     glActiveTexture(GL_TEXTURE9);
@@ -2360,6 +2442,7 @@ void Window::renderLightingPass() {
 
     lightUBO.bindBase(0);
     tri.draw();
+    glBindSampler(8, 0); // clear the PCSS no-compare sampler so it can't leak to other units
     glActiveTexture(GL_TEXTURE0);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
@@ -2552,6 +2635,9 @@ void Window::renderComposite() {
     glBindTexture(GL_TEXTURE_2D, (mBloomReady && mBloomTex) ? mBloomTex : mBlackTex);
     glActiveTexture(GL_TEXTURE2);
     glBindTexture(GL_TEXTURE_2D, godrayFBO.color(0));
+    glActiveTexture(GL_TEXTURE3);
+    glBindTexture(GL_TEXTURE_2D, mNoSSR ? mBlackTex : ssrFBO.color(0));
+    glUniform1i(glGetUniformLocation(pid, "uSSRDebug"), mSSRDebug);
     glUniform1f(glGetUniformLocation(pid, "uTime"), mTime);
     glUniform1f(glGetUniformLocation(pid, "uExposure"), mExposure);
     glUniform1f(glGetUniformLocation(pid, "uBloomIntensity"), (mBloomReady && mBloomTex) ? mBloomIntensity : 0.0f);
@@ -2670,6 +2756,7 @@ void Window::render() {
     renderSky();
     renderReflection();
     renderLightingPass();
+    renderSSR();
     renderWater();
     renderGodrays();
     renderParticles();

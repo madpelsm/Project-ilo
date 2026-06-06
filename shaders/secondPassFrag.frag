@@ -61,6 +61,12 @@ uniform float uShadowTexelFar;
 uniform float uShadowTexelWorldFar;
 uniform float uShadowBiasFar;
 uniform int uNoFarShadow;
+// Contact-hardening (PCSS-lite): the same near depth read raw (no compare) for the
+// blocker search, on unit 8 through a no-compare sampler object.
+uniform highp sampler2D uShadowDepthRaw;
+uniform float uShadowSunSize;     // penumbra growth with blocker distance (0 = plain PCF)
+uniform float uShadowMaxPenumbra; // UV cap on the soft radius
+uniform int uShadowTaps;          // Vogel-disk taps for the soft filter
 
 vec3 applyFog(vec3 col, vec3 P) {
     float dist = length(P - eyePos);
@@ -96,6 +102,37 @@ float pcf(highp sampler2DShadow sm, vec2 uv, float ref, float texel) {
             s += texture(sm, vec3(uv + vec2(float(i), float(j)) * texel, ref));
     return s / 9.0;
 }
+// Interleaved-gradient noise + Vogel disk for a per-pixel-rotated soft kernel.
+float ign(vec2 p) { return fract(52.9829189 * fract(0.06711056 * p.x + 0.00583715 * p.y)); }
+vec2 vogel(int i, int n, float rot) {
+    float r = sqrt((float(i) + 0.5) / float(n));
+    float theta = float(i) * 2.39996323 + rot * 6.2831853;
+    return r * vec2(cos(theta), sin(theta));
+}
+// Contact-hardening near-cascade shadow: estimate the average blocker depth, grow the
+// penumbra with the receiver->blocker gap (sharp at contact, soft at the shadow tip),
+// then a rotated Vogel-disk hardware-PCF at that radius.
+float pcssNear(vec3 q, float rot) {
+    float searchR = uShadowTexel * 5.0;
+    float bSum = 0.0, bCnt = 0.0;
+    for (int i = 0; i < 16; i++) {
+        float d = texture(uShadowDepthRaw, q.xy + vogel(i, 16, rot) * searchR).r;
+        if (d < q.z - uShadowBias) {
+            bSum += d;
+            bCnt += 1.0;
+        }
+    }
+    if (bCnt < 0.5)
+        return 1.0; // no blockers -> fully lit
+    float pen = clamp((q.z - bSum / bCnt) * uShadowSunSize, uShadowTexel, uShadowMaxPenumbra);
+    float s = 0.0;
+    for (int i = 0; i < 24; i++) {
+        if (i >= uShadowTaps)
+            break;
+        s += texture(uShadowMap, vec3(q.xy + vogel(i, uShadowTaps, rot) * pen, q.z - uShadowBias));
+    }
+    return s / float(uShadowTaps);
+}
 float sampleFar(vec3 P, vec3 N, float no) {
     vec3 Po = P + N * uShadowTexelWorldFar * no;
     vec4 lc = uLightVPFar * vec4(Po, 1.0);
@@ -117,7 +154,9 @@ float sunShadow(vec3 P, vec3 N, float ndl) {
     float inset = uShadowTexel * 1.5;
     bool inNear = q.z <= 1.0 && q.x >= inset && q.x <= 1.0 - inset && q.y >= inset && q.y <= 1.0 - inset;
     if (inNear) {
-        float nearSh = pcf(uShadowMap, q.xy, q.z - uShadowBias, uShadowTexel);
+        // Contact-hardening soft shadow in the near cascade (plain 3x3 if disabled).
+        float nearSh = uShadowSunSize > 0.0 ? pcssNear(q, ign(gl_FragCoord.xy))
+                                            : pcf(uShadowMap, q.xy, q.z - uShadowBias, uShadowTexel);
         if (uNoFarShadow == 1)
             return nearSh;
         float edge = smoothstep(0.85, 1.0, max(abs(q.x * 2.0 - 1.0), abs(q.y * 2.0 - 1.0)));

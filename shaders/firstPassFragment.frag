@@ -16,5 +16,9 @@ void main() {
     oPosition = vec4(vWorldPos, vEmissive);
     oNormal = vec4(normalize(vNormal), 1.0);
     oAlbedo = vec4(vAlbedo, 1.0);
-    oMtlProps = vec4(vMtlProps.x / 256.0, vMtlProps.y, vMtlProps.z, 0.0);
+    // .a = shoreline wetness: a thin up-facing band just above the Mere (vWorldPos.y is
+    // true world Y since the floating origin only snaps X/Z). Read only by the SSR pass.
+    float wet = smoothstep(1.6, 0.0, vWorldPos.y) * smoothstep(-0.2, 0.05, vWorldPos.y) *
+                smoothstep(0.4, 0.85, clamp(normalize(vNormal).y, 0.0, 1.0));
+    oMtlProps = vec4(vMtlProps.x / 256.0, vMtlProps.y, vMtlProps.z, wet);
 }

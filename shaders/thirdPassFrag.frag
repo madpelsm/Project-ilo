@@ -7,6 +7,8 @@ out vec4 FragColor;
 uniform sampler2D uScene;
 uniform sampler2D uBloom;
 uniform sampler2D uGodray;
+uniform sampler2D uSSR;   // wet-shore screen-space reflections (rgb radiance, a = weight)
+uniform int uSSRDebug;    // 1 = show SSR rgb, 2 = show SSR weight
 uniform float uExposure;       // ~1.0
 uniform float uBloomIntensity; // ~0.6
 uniform float uVignetteMax;    // 0..1, strength of the darkening
@@ -32,6 +34,11 @@ void main() {
     scene.r = texture(uScene, TexCoords + ca).r;
     scene.g = texture(uScene, TexCoords).g;
     scene.b = texture(uScene, TexCoords - ca).b;
+    // Wet-shore reflections (mixed before bloom/tonemap so they bloom + grade like the scene).
+    vec4 ssr = texture(uSSR, TexCoords);
+    if (uSSRDebug == 1) { FragColor = vec4(ssr.rgb, 1.0); return; }
+    if (uSSRDebug == 2) { FragColor = vec4(vec3(ssr.a), 1.0); return; }
+    scene = mix(scene, ssr.rgb, ssr.a);
     vec3 hdr = scene + texture(uBloom, TexCoords).rgb * uBloomIntensity
                + texture(uGodray, TexCoords).rgb; // crepuscular rays
     vec3 mapped = ACESFilm(hdr * uExposure); // exposure before, clamp inside

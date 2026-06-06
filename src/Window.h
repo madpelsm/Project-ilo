@@ -69,6 +69,11 @@ class Window {
     ShaderProgram reflectionProg; // planar water reflection pass
     glm::mat4 mReflVP = glm::mat4(1.0f);
     bool mNoReflect = false;
+    ShaderProgram ssrProg; // screen-space reflections for the wet shore
+    int mSSRSteps = 16;
+    float mSSRStride = 1.5f, mSSRThickness = 1.6f;
+    bool mNoSSR = false;
+    int mSSRDebug = 0;
     std::vector<glm::vec3> mSsaoKernel; // hemisphere offsets, uploaded once
     std::vector<glm::vec3> mSsaoNoise;  // 4x4 rotation tile, uploaded once
     // Sun shadow map (directional, camera-centred, texel-snapped, origin-relative).
@@ -86,12 +91,17 @@ class Window {
     // Volumetric ground-mist (pools in the hollows; CPU-baked tiling fbm noise).
     ilo::Texture2D mNoiseTex;
     float mMistBaseY = 0.5f, mMistHeightFalloff = 0.4f, mMistStrength = 1.0f;
+    // Contact-hardening (PCSS-lite) soft sun shadows.
+    GLuint mShadowRawSampler = 0; // no-compare sampler for the blocker search
+    float mShadowSunSize = 0.06f, mShadowMaxPenumbra = 0.02f;
+    int mShadowTaps = 12;
+    bool mNoPcss = false;
     GLuint mWaterVao = 0, mWaterVbo = 0;
     GLuint mParticleVao = 0, mParticleVbo = 0;
     int mParticleCount = 0;
 
     // render targets + helpers
-    ilo::Framebuffer gBuffer, hdrFBO, bloomA, bloomB, skyFBO, godrayFBO, ssaoFBO, ssaoBlurFBO, shadowFBO, shadowFarFBO, reflectionFBO;
+    ilo::Framebuffer gBuffer, hdrFBO, bloomA, bloomB, skyFBO, godrayFBO, ssaoFBO, ssaoBlurFBO, shadowFBO, shadowFarFBO, reflectionFBO, ssrFBO;
     ilo::ScreenTri tri;
     ilo::LightUBO lightUBO;
     GLuint mBlackTex = 0;
@@ -282,6 +292,7 @@ class Window {
     void initMistNoise();
     void renderGeometryPass();
     void renderSSAO();
+    void renderSSR();
     void renderLightingPass();
     void renderWater();
     void renderGodrays();
