@@ -1,3 +1,4 @@
+#include "Props.h"
 #include "Window.h"
 #include <vector>
 
@@ -29,6 +30,12 @@ int main(int argc, char *argv[]) {
     w.addNPC(*forest);
     w.mForest = forest;
 
+    // Procedurally generated trees + rocks (all coded, no asset files) thicken the
+    // grove and wrap it in a denser ring of woodland so the edges fade into the dark.
+    Player *props = new Player();
+    props->setGeometry(proc::makeGroveProps(20260606u, 90, 55, 9.0f, 23.0f));
+    w.mProps = props;
+
     // The Heart of the Grove: a glowing idol at the origin that wakes as fireflies
     // are gathered. Its emissive colour/strength is driven each frame by the game.
     Player *heart = new Player("./shapes/suzanne.obj");
@@ -56,6 +63,7 @@ int main(int argc, char *argv[]) {
     w.run();
 
     delete forest;
+    delete props;
     delete heart;
     delete deer1;
     delete deer2;

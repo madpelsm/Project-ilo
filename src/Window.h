@@ -3,12 +3,13 @@
 #include "Firefly.h"
 #include "GameObject.h"
 #include "Hud.h"
+#include "Mushroom.h"
 #include "Player.h"
 #include "Render.h"
 #include "Shader.h"
 #include "ShaderProgram.h"
 #include <SDL2/SDL.h>
-#include <glad/glad.h>
+#include "GL.h"
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
@@ -37,6 +38,7 @@ class Window {
     bool mLowSpec = false;
     float lastTime = 0.0f;
     float mMouseSensitivity = 0.0016f;
+    bool mInvertY = false; // toggle with 'I' (handy for trackpads)
     float mFOV = 1.4f; // vertical field of view in radians
 
     // timing
@@ -69,7 +71,9 @@ class Window {
     std::vector<Player *> mGameObjects;
     Player *mForest = nullptr;
     Player *mHeart = nullptr;
+    Player *mProps = nullptr; // procedural trees + rocks (double-sided)
     FireflySystem mFireflies;
+    MushroomField mMushrooms;
     Hud mHud;
 
     // lights packed each frame; [0] is the lantern
@@ -84,6 +88,9 @@ class Window {
     float mIntroTimer = 1.5f;
     bool mSprinting = false;
     bool mFreezeFuel = false; // screenshot/testing: hold fuel constant
+    int mCombo = 0;           // consecutive firefly catches
+    float mComboTimer = 0.0f; // time left to extend the combo
+    float mDawn = 0.0f;       // 0 = night, 1 = full dawn (rises with progress / on win)
 
     // Heart of the Grove
     glm::vec3 mHeartPos = glm::vec3(0.0f, 1.6f, 0.0f);
@@ -133,6 +140,7 @@ class Window {
     void initGL();
     void initAssets();
     void run();
+    void stepFrameWeb(); // one frame, driven by the browser main loop
     void update();
     void render();
     void renderGeometryPass();

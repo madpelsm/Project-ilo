@@ -34,6 +34,24 @@ uniform vec3 uSkyHorizon;
 uniform vec3 uMoonDir;
 uniform vec3 uMoonColor;
 uniform float uMoonSize;
+uniform float uStarFade; // 1 at night, 0 at full dawn
+uniform float uTime;
+
+float hash31(vec3 p) {
+    p = fract(p * 0.3183099 + 0.1);
+    p *= 17.0;
+    return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
+}
+
+vec3 starfield(vec3 ray) {
+    if (ray.y < 0.02)
+        return vec3(0.0);
+    vec3 cell = floor(ray * 130.0);
+    float h = hash31(cell);
+    float s = smoothstep(0.992, 1.0, h);                  // sparse points
+    float tw = 0.55 + 0.45 * sin(uTime * 2.5 + h * 50.0); // twinkle
+    return vec3(0.9, 0.95, 1.0) * s * tw * smoothstep(0.0, 0.18, ray.y);
+}
 
 vec3 applyFog(vec3 col, vec3 P) {
     float dist = length(P - eyePos);
@@ -50,6 +68,8 @@ vec3 skyColor(vec3 ray) {
     sky += uMoonColor * m;
     // faint glow halo around the moon
     sky += uMoonColor * 0.15 * pow(max(dot(ray, normalize(uMoonDir)), 0.0), 8.0);
+    // stars (fade out as dawn breaks), dimmed near the moon's glow
+    sky += starfield(ray) * uStarFade;
     return sky;
 }
 

@@ -31,6 +31,7 @@ class Player : GameObject {
     void setScale(glm::vec3 _scale);
     void setTransform(float x, float y, float z, float angleZ);
     void setShape(std::vector<Vertex> vertices);
+    void setGeometry(const std::vector<Vertex2> &verts); // procedurally-built geometry
     void loadGeometry(std::string filePath);
     void loadDefaultGeometry();
     void refreshShaderTransforms(int shaderProgramID);

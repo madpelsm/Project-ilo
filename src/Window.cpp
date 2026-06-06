@@ -5,7 +5,12 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#include <emscripten/html5.h>
+#else
 #include <thread>
+#endif
 
 namespace {
 // Movement tuning (metres / second), from the design spec.
@@ -67,6 +72,7 @@ void Window::sdlDie() {
     // The Player objects are owned (and deleted) by main while the context is still
     // alive, so their destructors free their own GL resources; don't touch them here.
     mFireflies.destroy();
+    mMushrooms.destroy();
     mHud.destroy();
     destroyFramebuffers();
     tri.destroy();
@@ -90,15 +96,24 @@ void Window::init() {
     if (SDL_Init(SDL_INIT_VIDEO) < 0) {
         std::cout << "failed to intialise video" << std::endl;
     }
+#ifdef __EMSCRIPTEN__
+    // WebGL2 (OpenGL ES 3.0); the WebGL version is forced by the linker flags.
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
+#else
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
+#endif
     SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
 
+    Uint32 winFlags = SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE;
+#ifndef __EMSCRIPTEN__
+    winFlags |= SDL_WINDOW_ALLOW_HIGHDPI; // on web, keep the backing store at 1:1 for perf
+#endif
     mSDLwindow = SDL_CreateWindow(
-        mTitle.c_str(), SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, mWidth, mHeight,
-        SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
+        mTitle.c_str(), SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, mWidth, mHeight, winFlags);
     if (mSDLwindow == nullptr) {
         std::cout << "failed to create Window" << std::endl;
     }
@@ -119,11 +134,16 @@ void Window::init() {
 }
 
 void Window::initGL() {
+#ifdef __EMSCRIPTEN__
+    // No loader on the web; enable float render targets (RGBA16F G-buffer + HDR).
+    emscripten_webgl_enable_extension(emscripten_webgl_get_current_context(), "EXT_color_buffer_float");
+#else
     if (!gladLoadGLLoader(SDL_GL_GetProcAddress)) {
         printf("Something went wrong!\n");
         exit(-1);
     }
     printf("OpenGL %d.%d\n", GLVersion.major, GLVersion.minor);
+#endif
 
     glFrontFace(GL_CCW);
     glCullFace(GL_BACK);
@@ -212,6 +232,12 @@ void Window::destroyFramebuffers() {
 }
 
 void Window::loadGeometries() {
+#ifdef __EMSCRIPTEN__
+    // Single-threaded on the web (no pthreads / SharedArrayBuffer needed).
+    for (unsigned int i = 0; i < mGameObjects.size(); i++) {
+        mGameObjects[i]->loadDefaultGeometry();
+    }
+#else
     std::vector<std::thread> loaders;
     for (unsigned int i = 0; i < mGameObjects.size(); i++) {
         loaders.push_back(std::thread(&Player::loadDefaultGeometry, mGameObjects[i]));
@@ -219,14 +245,32 @@ void Window::loadGeometries() {
     for (unsigned int i = 0; i < loaders.size(); i++) {
         loaders[i].join();
     }
+#endif
 }
 
 void Window::initAssets() {
     for (unsigned int i = 0; i < mGameObjects.size(); i++) {
         mGameObjects[i]->initGL();
     }
+    if (mProps)
+        mProps->initGL();
     mFireflies.init(60);
+    mMushrooms.init(8);
 }
+
+void Window::stepFrameWeb() {
+    double now = SDL_GetTicks() / 1000.0;
+    mDt = (float)std::min((double)DT_CLAMP, std::max(0.0, now - mPrevSeconds));
+    mPrevSeconds = now;
+    mTime += mDt;
+    checkEvents();
+    update();
+    render();
+}
+
+#ifdef __EMSCRIPTEN__
+static void ilo_em_loop(void *arg) { static_cast<Window *>(arg)->stepFrameWeb(); }
+#endif
 
 void Window::run() {
     if (!windowInitialised) {
@@ -234,6 +278,12 @@ void Window::run() {
         return;
     }
 
+#ifdef __EMSCRIPTEN__
+    // The browser owns the event loop; drive one frame per animation tick.
+    mPrevSeconds = SDL_GetTicks() / 1000.0;
+    emscripten_set_main_loop_arg(ilo_em_loop, this, 0, 1);
+    return;
+#else
     // Headless verification harness (see Screenshot.h).
     const char *shotPath = std::getenv("ILO_SHOT");
     const char *shotFrameEnv = std::getenv("ILO_SHOT_FRAME");
@@ -278,6 +328,7 @@ void Window::run() {
             break;
         }
     }
+#endif
 }
 
 void Window::checkEvents() {
@@ -305,9 +356,13 @@ void Window::checkEvents() {
 
     while (SDL_PollEvent(&event)) {
         switch (event.type) {
-        case SDL_MOUSEMOTION:
-            mCamera.rotate(-mMouseSensitivity * event.motion.xrel, -mMouseSensitivity * event.motion.yrel);
+        case SDL_MOUSEMOTION: {
+            float dPitch = -mMouseSensitivity * event.motion.yrel;
+            if (mInvertY)
+                dPitch = -dPitch;
+            mCamera.rotate(-mMouseSensitivity * event.motion.xrel, dPitch);
             break;
+        }
         case SDL_MOUSEBUTTONDOWN:
             if (event.button.button == SDL_BUTTON_LEFT && mState == GameState::Playing &&
                 mFlareCooldown <= 0.0f && mFuelW >= FLARE_COST) {
@@ -334,6 +389,9 @@ void Window::checkEvents() {
                     mState = GameState::Paused;
                 else if (mState == GameState::Paused)
                     mState = GameState::Playing;
+                break;
+            case SDL_SCANCODE_I:
+                mInvertY = !mInvertY; // flip vertical look (trackpad preference)
                 break;
             case SDL_SCANCODE_R:
                 resetGame();
@@ -431,9 +489,9 @@ void Window::packLights() {
         mLights.push_back(heart);
     }
 
-    // Firefly lights (nearest motes to the camera), capped to keep the loop cheap.
-    int cap = mLowSpec ? 14 : 46;
-    mFireflies.appendLights(mLights, mTime, mCamera.mPosition, cap);
+    // Firefly + mushroom lights (nearest to the camera), capped to keep the loop cheap.
+    mFireflies.appendLights(mLights, mTime, mCamera.mPosition, mLowSpec ? 12 : 34);
+    mMushrooms.appendLights(mLights, mTime, mCamera.mPosition, mLowSpec ? 4 : 8);
 
     lightUBO.upload(mLights.data(), (int)mLights.size());
 }
@@ -452,9 +510,19 @@ void Window::update() {
         mCollected += got;
         mFuelW = std::min(FUEL_MAX, mFuelW + fuelGained);
         for (const CollectEvent &e : events) {
+            // combo: chaining catches within the window stacks a warmth bonus
+            mCombo = (mComboTimer > 0.0f) ? mCombo + 1 : 1;
+            mComboTimer = 3.0f;
+            mFuelW = std::min(FUEL_MAX, mFuelW + (mCombo - 1) * 1.5f);
             if (mPulses.size() < 8)
                 mPulses.push_back({e.pos, e.color, 0.0f, 0.35f});
             mFlash = std::min(0.25f, mFlash + 0.15f);
+        }
+        // glowing mushrooms: fly close to harvest a little warmth
+        float shroomWarmth = mMushrooms.update(mDt, mTime, mCamera.mPosition, 2.0f);
+        if (shroomWarmth > 0.0f) {
+            mFuelW = std::min(FUEL_MAX, mFuelW + shroomWarmth);
+            mFlash = std::min(0.25f, mFlash + 0.12f);
         }
         if (!mFreezeFuel) {
             float drain = FUEL_DRAIN + (mSprinting ? SPRINT_DRAIN_EXTRA : 0.0f);
@@ -474,6 +542,17 @@ void Window::update() {
         mFlareTimer -= mDt;
     if (mFlareCooldown > 0.0f)
         mFlareCooldown -= mDt;
+    if (mComboTimer > 0.0f) {
+        mComboTimer -= mDt;
+        if (mComboTimer <= 0.0f)
+            mCombo = 0;
+    }
+    // Dawn rises gently with progress and breaks fully on a win.
+    {
+        float progress = std::min(1.0f, mCollected / (float)mTarget);
+        float dawnTarget = (mState == GameState::Won) ? 1.0f : progress * 0.30f;
+        mDawn += (dawnTarget - mDawn) * std::min(1.0f, mDt * 0.6f);
+    }
     for (size_t i = 0; i < mPulses.size();) {
         mPulses[i].age += mDt;
         if (mPulses[i].age >= mPulses[i].life)
@@ -552,6 +631,13 @@ void Window::resetGame() {
     mCollected = 0;
     mState = GameState::Intro;
     mIntroTimer = 1.5f;
+    mCombo = 0;
+    mComboTimer = 0.0f;
+    mDawn = 0.0f;
+    mFlash = 0.0f;
+    mFlareTimer = 0.0f;
+    mFlareCooldown = 0.0f;
+    mPulses.clear();
     mCamera.mPosition = glm::vec3(0, 2, 18);
     mCamera.setYawPitch(0, 0);
     mFireflies.resetAll(glm::vec3(0, 2, 18));
@@ -576,10 +662,16 @@ void Window::renderGeometryPass() {
     glUniformMatrix4fv(glGetUniformLocation(pid, "view"), 1, GL_FALSE, glm::value_ptr(mCamera.mView));
     glUniform1f(glGetUniformLocation(pid, "time"), mTime);
 
+    // Closed OBJ meshes (forest, deer, Heart) render with back-face culling.
     for (unsigned int i = 0; i < mGameObjects.size(); i++) {
         mGameObjects[i]->render(pid);
     }
-    mFireflies.render(pid, mTime); // disables cull internally; drawn last
+    // Procedurally generated meshes are drawn double-sided (their winding varies).
+    glDisable(GL_CULL_FACE);
+    if (mProps)
+        mProps->render(pid);
+    mMushrooms.render(pid, mTime);
+    mFireflies.render(pid, mTime);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
@@ -607,16 +699,27 @@ void Window::renderLightingPass() {
     glm::mat4 invVP = glm::inverse(persp * mCamera.mView);
     glUniformMatrix4fv(glGetUniformLocation(pid, "invViewProj"), 1, GL_FALSE, glm::value_ptr(invVP));
     glUniform3f(glGetUniformLocation(pid, "eyePos"), mCamera.mPosition.x, mCamera.mPosition.y, mCamera.mPosition.z);
-    glUniform3f(glGetUniformLocation(pid, "uAmbient"), mAmbient.x, mAmbient.y, mAmbient.z);
-    glUniform3f(glGetUniformLocation(pid, "uFogColor"), mFogColor.x, mFogColor.y, mFogColor.z);
+
+    // Blend the night palette toward a warm dawn as the grove awakens.
+    float d = mDawn;
+    glm::vec3 ambient = glm::mix(mAmbient, glm::vec3(0.13f, 0.13f, 0.16f), d);
+    glm::vec3 fog = glm::mix(mFogColor, glm::vec3(0.42f, 0.34f, 0.40f), d);
+    glm::vec3 skyTop = glm::mix(mSkyTop, glm::vec3(0.16f, 0.20f, 0.34f), d);
+    glm::vec3 skyHorizon = glm::mix(mSkyHorizon, glm::vec3(0.95f, 0.55f, 0.38f), d);
+    glm::vec3 moon = mMoonColor * (1.0f - 0.7f * d);
+
+    glUniform3f(glGetUniformLocation(pid, "uAmbient"), ambient.x, ambient.y, ambient.z);
+    glUniform3f(glGetUniformLocation(pid, "uFogColor"), fog.x, fog.y, fog.z);
     glUniform1f(glGetUniformLocation(pid, "uFogDensity"), mFogDensity);
     glUniform1f(glGetUniformLocation(pid, "uFogHeightFalloff"), mFogHeightFalloff);
     glUniform1f(glGetUniformLocation(pid, "uFogBaseY"), mFogBaseY);
-    glUniform3f(glGetUniformLocation(pid, "uSkyTop"), mSkyTop.x, mSkyTop.y, mSkyTop.z);
-    glUniform3f(glGetUniformLocation(pid, "uSkyHorizon"), mSkyHorizon.x, mSkyHorizon.y, mSkyHorizon.z);
+    glUniform3f(glGetUniformLocation(pid, "uSkyTop"), skyTop.x, skyTop.y, skyTop.z);
+    glUniform3f(glGetUniformLocation(pid, "uSkyHorizon"), skyHorizon.x, skyHorizon.y, skyHorizon.z);
     glUniform3f(glGetUniformLocation(pid, "uMoonDir"), mMoonDir.x, mMoonDir.y, mMoonDir.z);
-    glUniform3f(glGetUniformLocation(pid, "uMoonColor"), mMoonColor.x, mMoonColor.y, mMoonColor.z);
+    glUniform3f(glGetUniformLocation(pid, "uMoonColor"), moon.x, moon.y, moon.z);
     glUniform1f(glGetUniformLocation(pid, "uMoonSize"), mMoonSize);
+    glUniform1f(glGetUniformLocation(pid, "uStarFade"), 1.0f - d);
+    glUniform1f(glGetUniformLocation(pid, "uTime"), mTime);
 
     lightUBO.bindBase(0);
     tri.draw();
@@ -702,6 +805,13 @@ void Window::renderHud() {
         fill.a *= 0.6f + 0.4f * std::sin(6.2831f * 2.0f * mTime);
     if (f > 0.001f)
         mHud.rect(0.04f, 0.90f, 0.30f * f, 0.035f, fill);
+
+    // Combo indicator (under the counter) while a chain is active.
+    if (mCombo >= 2 && mComboTimer > 0.0f) {
+        std::snprintf(buf, sizeof(buf), "COMBO x%d", mCombo);
+        float a = std::min(1.0f, mComboTimer / 1.5f);
+        mHud.text(0.04f, 0.105f, 0.030f, buf, glm::vec4(1.0f, 0.85f, 0.4f, a));
+    }
 
     if (mState == GameState::Playing && f <= 0.20f && ((int)(mTime * 2.0f) % 2 == 0))
         mHud.textCentered(0.5f, 0.12f, 0.035f, "FIND A FIREFLY", glm::vec4(1.0f, 0.25f, 0.2f, 1.0f));

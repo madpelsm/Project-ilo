@@ -185,7 +185,14 @@ void Player::initGL() {
     std::cout << "initialised  player gl" << std::endl;
 }
 
+void Player::setGeometry(const std::vector<Vertex2> &verts) {
+    mVertices2 = verts;
+    createIndices();
+}
+
 void Player::loadDefaultGeometry() {
+    if (!mVertices2.empty())
+        return; // geometry was supplied procedurally; nothing to load
     this->loadGeometry(mGeomPath);
 }
 void Player::cleanup() {
