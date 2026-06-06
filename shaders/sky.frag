@@ -17,6 +17,39 @@ uniform float uSunDiscSize, uMoonSize;
 uniform float uStarFade, uAuroraStrength, uGalaxyStrength, uCloudCoverage;
 uniform vec2 uCloudWind;
 
+// --- Constellation weaving (Phase 8: "the sky you author") --------------------
+uniform int uPinCount;         // in-progress weave pins (0..8)
+uniform vec3 uPins[8];         // pin directions (unit, world space)
+uniform vec3 uWeaveColor;      // colour of the active weave
+uniform vec3 uWeaveCursor;     // reticle dir: endpoint of the live preview thread
+uniform int uCStarCount;       // persisted constellation stars (0..24)
+uniform vec4 uCStars[24];      // .xyz = unit dir, .w = link-to-previous flag
+uniform vec3 uCStarColor[24];  // per-star colour (its constellation's hue)
+uniform vec3 uAuroraColor;     // hue of the most recent woven constellation
+uniform float uAuroraColorMix; // 0 = default aurora .. ~0.7 = full woven colour
+
+// A steady seed-star: bright pin-point core + a soft halo, in angular space.
+float starGlow(vec3 ray, vec3 S) {
+    float ang = acos(clamp(dot(ray, S), -1.0, 1.0));
+    return smoothstep(0.006, 0.0, ang) + exp(-ang / 0.04) * 0.35;
+}
+// Glow of the great-circle arc from unit A to unit B (with in-span test + endpoint
+// fallback so the line has rounded caps, and an antipodal/degenerate guard).
+float segGlow(vec3 ray, vec3 A, vec3 B) {
+    vec3 n = cross(A, B);
+    float ln = length(n);
+    if (ln < 1e-4)
+        return 0.0;
+    n /= ln;
+    float perp = abs(asin(clamp(dot(ray, n), -1.0, 1.0)));
+    vec3 p = normalize(ray - n * dot(ray, n)); // ray projected into the arc's plane
+    float ab = dot(A, B);
+    bool inSpan = dot(p, A) >= ab - 1e-3 && dot(p, B) >= ab - 1e-3;
+    float endd = min(acos(clamp(dot(ray, A), -1.0, 1.0)), acos(clamp(dot(ray, B), -1.0, 1.0)));
+    float d = inSpan ? perp : endd;
+    return smoothstep(0.005, 0.0, d) + exp(-d / 0.03) * 0.25;
+}
+
 float hash21(vec2 p) {
     vec3 q = fract(vec3(p.xyx) * 0.1031);
     q += dot(q, q.yzx + 33.33);
@@ -133,8 +166,30 @@ void main() {
             a += band * (0.6 - fi * 0.15);
         }
         vec3 auroraCol = mix(vec3(0.10, 1.0, 0.5), vec3(0.7, 0.3, 1.0), fbm(ap + uTime * 0.05));
+        auroraCol = mix(auroraCol, uAuroraColor, uAuroraColorMix); // woven constellation hue
         col += auroraCol * a * uAuroraStrength;
     }
+
+    // Woven constellations: persisted figures (each in its own hue) + the in-progress
+    // weave with a live preview thread to the reticle. Accumulated apart, then faded
+    // with the real stars so the authored sky vanishes gently into daylight.
+    vec3 weave = vec3(0.0);
+    for (int i = 0; i < 24; i++) {
+        if (i >= uCStarCount) break;
+        weave += starGlow(ray, uCStars[i].xyz) * uCStarColor[i] * 3.0;
+        if (uCStars[i].w > 0.5)
+            weave += segGlow(ray, uCStars[i - 1].xyz, uCStars[i].xyz) * uCStarColor[i] * 2.0;
+    }
+    for (int i = 0; i < 8; i++) {
+        if (i >= uPinCount) break;
+        weave += starGlow(ray, uPins[i]) * uWeaveColor * (0.7 + 0.3 * sin(uTime * 2.0)) * 4.0;
+        if (i > 0)
+            weave += segGlow(ray, uPins[i - 1], uPins[i]) * uWeaveColor * 3.0;
+    }
+    if (uPinCount > 0)
+        weave += segGlow(ray, uPins[uPinCount - 1], uWeaveCursor) * uWeaveColor * 1.2;
+    if (ray.y > 0.0)
+        col += weave * uStarFade;
 
     FragColor = max(col, vec3(0.0));
 }

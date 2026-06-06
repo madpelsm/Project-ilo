@@ -15,6 +15,8 @@ uniform vec3 uWaterColor;
 uniform float uStarFade;
 uniform vec4 uDimple[12]; // fish rises: xy = centre XZ (world), z = spawn time, w unused
 uniform int uDimpleCount;
+uniform vec3 uAuroraColor;     // woven-constellation hue the Mere catches at night
+uniform float uAuroraColorMix; // 0 = default green aurora .. ~0.7 = full woven colour
 
 vec3 reflSky(vec3 r) {
     vec3 c = mix(uSkyHorizon, uSkyTop, pow(max(r.y, 0.0), 0.5));
@@ -22,6 +24,8 @@ vec3 reflSky(vec3 r) {
     c += uMoonColor * pow(max(dot(r, normalize(uMoonDir)), 0.0), 400.0) * 5.0 * uStarFade; // moon glint
     c += uMoonColor * pow(max(dot(r, normalize(uMoonDir)), 0.0), 14.0) * 0.25 * uStarFade; // moon glitter
     c += uHorizonGlow * exp(-max(r.y, 0.0) * 5.0) * 0.5;
+    // The authored aurora's hue pools faintly in the still water at night.
+    c += mix(vec3(0.10, 1.0, 0.5), uAuroraColor, uAuroraColorMix) * smoothstep(0.0, 0.5, r.y) * 0.15 * uStarFade;
     return c;
 }
 

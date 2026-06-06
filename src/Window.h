@@ -99,6 +99,29 @@ class Window {
     std::vector<glm::vec4> mDimples; // fish rises on the Mere: (x, z, spawnTime, 0)
     float mDimpleTimer = 0.0f;       // countdown to the next rise
     unsigned int mDimpleRng = 0x9E3779B9u;
+
+    // Phase 8 — "the sky you author": weave seed-stars into constellations that draw a
+    // line across the live sky, ignite a fallen-twin on the plain, colour the aurora,
+    // grant a gentle boon, and persist as a record of play.
+    static const int MAX_PINS = 6;
+    static const int MAX_CONSTELLATIONS = 4;
+    static const int MAX_CSTARS = 24;
+    struct Constellation {
+        std::vector<glm::vec3> stars; // unit sky directions
+        glm::vec3 color = glm::vec3(1.0f);
+        float bornTime = 0.0f;
+        std::vector<glm::vec3> ground; // fallen-twin marker positions (absolute world)
+    };
+    std::vector<glm::vec3> mWeavePins;            // in-progress pins (unit dirs)
+    glm::vec3 mWeaveColor = glm::vec3(0.21f, 1.0f, 0.76f);
+    std::vector<Constellation> mConstellations;   // persisted, woven figures
+    InstancedField mTwinField;                    // fallen-twin ground markers (beacon mesh)
+    glm::vec3 mAuroraColor = glm::vec3(0.10f, 1.0f, 0.5f);
+    float mAuroraColorMix = 0.0f;                 // eased toward a target on weave
+    float mAuroraColorTarget = 0.0f;
+    float mWeaveAuroraBoost = 0.0f;               // decaying surge on completion
+    float mBoonLantern = 1.0f;                    // lantern reach/brightness (cap 1.5)
+    float mGlideCap = 90.0f;                      // glide ceiling (cap 130)
     glm::vec2 mGrassCenter = glm::vec2(1e9f, 1e9f);
     FireflySystem mFireflies;
     MushroomField mMushrooms;
@@ -210,6 +233,11 @@ class Window {
     void updateHeart();
     void updateDeer();
     void updateBeacons();
+    void pinSeedStar();
+    void clearWeave();
+    void completeWeave();
+    void updateConstellations();
+    void seedDemoConstellation();
     void resetGame();
     void addDeer(Player &deer, float x, float z, int herd = 0, float yawOffset = 0.0f);
 

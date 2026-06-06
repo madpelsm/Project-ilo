@@ -31,6 +31,17 @@ const float FLARE_COOLDOWN = 1.5f;
 const float FLARE_MULT = 2.0f;
 const float DEER_SPEED = 1.0f;
 
+// Calm fixed palette for woven constellations (indexed by completed count -> stable demo).
+glm::vec3 weavePalette(size_t i) {
+    static const glm::vec3 pal[4] = {
+        glm::vec3(0.21f, 1.00f, 0.76f), // jade
+        glm::vec3(1.00f, 0.78f, 0.35f), // gold
+        glm::vec3(0.62f, 0.40f, 1.00f), // violet
+        glm::vec3(1.00f, 0.42f, 0.62f), // rose
+    };
+    return pal[i & 3];
+}
+
 void buildProgram(ShaderProgram &prog, const char *vsPath, const char *fsPath) {
     Shader vs, fs;
     vs.loadShader(vsPath, GL_VERTEX_SHADER);
@@ -75,6 +86,7 @@ void Window::sdlDie() {
     mBirds.destroy();
     mButterflies.destroy();
     mBeaconField.destroy();
+    mTwinField.destroy();
     for (auto &f : mFields)
         f.destroy();
     mGrass.destroy();
@@ -394,6 +406,9 @@ void Window::initAssets() {
     }
     mBeaconField.buildDynamic(proc::makeBeacon(), 8);
     updateBeacons();
+
+    // Fallen-twin markers for woven constellations (same glassy spire as a beacon).
+    mTwinField.buildDynamic(proc::makeBeacon(), MAX_CSTARS);
 }
 
 void Window::updateBeacons() {
@@ -656,6 +671,8 @@ void Window::run() {
             mCamera.setYawPitch(yaw, pitch);
         }
     }
+    if (std::getenv("ILO_DEMO_SKY")) // verify Phase 8: a woven sky in front of the demo camera
+        seedDemoConstellation();
 
     mPrevSeconds = SDL_GetTicks() / 1000.0;
     while (!closed) {
@@ -702,7 +719,7 @@ void Window::checkEvents() {
         // Rise/sink relative to the ground (ground-follow keeps you on the surface
         // at mEyeOffset; raising it lets you drift up and glide tranquilly).
         if (state[SDL_SCANCODE_SPACE])
-            mEyeOffset = std::min(90.0f, mEyeOffset + FLY_VERT_SPEED * mDt);
+            mEyeOffset = std::min(mGlideCap, mEyeOffset + FLY_VERT_SPEED * mDt);
         if (state[SDL_SCANCODE_LCTRL] || state[SDL_SCANCODE_C])
             mEyeOffset = std::max(1.8f, mEyeOffset - FLY_VERT_SPEED * mDt);
     }
@@ -724,6 +741,9 @@ void Window::checkEvents() {
                 mFlareCooldown = FLARE_COOLDOWN;
                 mFlash = std::min(0.25f, mFlash + 0.1f);
             }
+            // Right-click pins a seed-star at the reticle: weave the night sky.
+            if (event.button.button == SDL_BUTTON_RIGHT && mState == GameState::Playing)
+                pinSeedStar();
             break;
         case SDL_WINDOWEVENT:
             if (event.window.event == SDL_WINDOWEVENT_SIZE_CHANGED)
@@ -745,6 +765,13 @@ void Window::checkEvents() {
                 break;
             case SDL_SCANCODE_I:
                 mInvertY = !mInvertY; // flip vertical look (trackpad preference)
+                break;
+            case SDL_SCANCODE_F: // finish the weave (>= 3 pins) into a constellation
+                if (mState == GameState::Playing && (int)mWeavePins.size() >= 3)
+                    completeWeave();
+                break;
+            case SDL_SCANCODE_Q: // calmly cancel the in-progress weave
+                clearWeave();
                 break;
             case SDL_SCANCODE_R:
                 resetGame();
@@ -784,6 +811,8 @@ void Window::packLights() {
     float f = mFuel;
     float radius = 3.0f + 9.0f * f;
     float li = 0.6f + 2.4f * f;
+    radius *= mBoonLantern; // woven constellations gently widen + warm the lantern
+    li *= mBoonLantern;
     // Flare: a short, fading burst that doubles the lantern's reach.
     if (mFlareTimer > 0.0f) {
         float fr = mFlareTimer / FLARE_DURATION;
@@ -987,6 +1016,7 @@ void Window::update() {
     updateHeart();
     updateDeer();
     updateBeacons();
+    updateConstellations();
     packLights();
     for (unsigned int i = 0; i < mGameObjects.size(); i++) {
         mGameObjects[i]->update();
@@ -1076,6 +1106,121 @@ void Window::updateDeer() {
     }
 }
 
+void Window::pinSeedStar() {
+    if ((int)mWeavePins.size() >= MAX_PINS)
+        return;
+    glm::vec3 d = glm::normalize(mCamera.mLookDir);
+    if (d.y <= 0.06f)
+        return; // must be aimed up at the sky, not the ground
+    for (const glm::vec3 &p : mWeavePins)
+        if (glm::dot(p, d) > 0.9998f)
+            return; // too close to an existing pin -> degenerate segment
+    mWeavePins.push_back(d);
+    mWeaveColor = weavePalette(mConstellations.size());
+    mFlash = std::min(0.18f, mFlash + 0.06f); // a soft tick of feedback
+}
+
+void Window::clearWeave() { mWeavePins.clear(); }
+
+void Window::completeWeave() {
+    if ((int)mWeavePins.size() < 3)
+        return;
+    int total = 0;
+    for (const Constellation &c : mConstellations)
+        total += (int)c.stars.size();
+    if ((int)mConstellations.size() >= MAX_CONSTELLATIONS || total + (int)mWeavePins.size() > MAX_CSTARS) {
+        clearWeave(); // the heavens are full — let the woven sky rest
+        return;
+    }
+    Constellation c;
+    c.stars = mWeavePins;
+    c.color = weavePalette(mConstellations.size());
+    c.bornTime = mTime;
+    glm::vec3 cam = mCamera.mPosition;
+    for (const glm::vec3 &d : mWeavePins) {
+        // The figure "falls" onto the plain along its own bearing: low stars land farther out.
+        glm::vec2 h(d.x, d.z);
+        float hl = glm::length(h);
+        h = hl > 1e-4f ? h / hl : glm::vec2(0.0f, 1.0f);
+        float dist = 15.0f + 30.0f * (1.0f - d.y);
+        float gx = cam.x + h.x * dist, gz = cam.z + h.y * dist;
+        glm::vec3 g(gx, ilo::terrainHeightFast(gx, gz) + 0.4f, gz);
+        c.ground.push_back(g);
+        if (mPulses.size() < 8) // a warm spark travels down the new chain
+            mPulses.push_back({g + glm::vec3(0.0f, 0.6f, 0.0f), c.color, 0.0f, 0.7f});
+    }
+    mConstellations.push_back(c);
+    mWeavePins.clear();
+    // The aurora unfurls in the new figure's colour; the world brightens a little.
+    mAuroraColor = c.color;
+    mAuroraColorTarget = 0.7f;
+    mWeaveAuroraBoost = 0.6f;
+    mBoonLantern = std::min(1.5f, mBoonLantern + 0.10f);
+    mGlideCap = std::min(130.0f, mGlideCap + 10.0f);
+    mRadiance = std::min(1.0f, mRadiance + 0.05f);
+    mFlash = std::min(0.3f, mFlash + 0.2f);
+}
+
+void Window::updateConstellations() {
+    mWeaveAuroraBoost *= std::exp(-mDt / 8.0f);
+    mAuroraColorMix += (mAuroraColorTarget - mAuroraColorMix) * std::min(1.0f, mDt * 2.0f);
+    // Refill the fallen-twin markers: each constellation's chain ignites left-to-right
+    // over ~2s then settles to a gentle breathing glow (a permanent record on the plain).
+    std::vector<FieldInstance> inst;
+    inst.reserve(MAX_CSTARS);
+    for (const Constellation &c : mConstellations) {
+        float t = mTime - c.bornTime;
+        for (size_t i = 0; i < c.ground.size(); i++) {
+            const glm::vec3 &pos = c.ground[i];
+            float onset = t - 0.18f * (float)i;
+            float on = onset <= 0.0f ? 0.0f : (onset >= 1.0f ? 1.0f : onset * onset * (3.0f - 2.0f * onset));
+            float breathe = 4.0f + 1.0f * std::sin(6.2831f * 0.4f * mTime + pos.x);
+            FieldInstance fi;
+            fi.pos = pos;
+            fi.tintEmissive = glm::vec4(c.color, breathe * on);
+            fi.xform = glm::vec4(0.9f, pos.x * 0.7f, 0.0f, 0.0f);
+            inst.push_back(fi);
+        }
+    }
+    mTwinField.update(inst);
+}
+
+void Window::seedDemoConstellation() {
+    // Headless verification (ILO_DEMO_SKY=1): seed one fully-lit jade constellation in
+    // front of the demo camera so a fixed-frame screenshot proves the sky line + colour
+    // aurora + fallen-twin ground chain all render.
+    mState = GameState::Playing;
+    if (!mFreezeDay) { // ensure night so the authored sky is visible
+        mDayPhase = 0.0f;
+        mFreezeDay = true;
+    }
+    glm::vec3 look = glm::normalize(mCamera.mLookDir);
+    float az0 = std::atan2(look.x, look.z);
+    glm::vec3 cam = mCamera.mPosition;
+    Constellation c;
+    c.color = glm::vec3(0.21f, 1.0f, 0.76f); // jade
+    c.bornTime = mTime - 5.0f;               // already lit + steady, deterministic
+    for (int k = 0; k < 5; k++) {
+        float frac = k / 4.0f - 0.5f;                            // -0.5 .. 0.5
+        float az = az0 + frac * 0.7f;                            // fan ±0.35 rad in azimuth
+        float el = 0.32f + 0.20f * std::sin((k / 4.0f) * 3.14159f); // an arch
+        glm::vec3 d = glm::normalize(glm::vec3(std::sin(az) * std::cos(el), std::sin(el), std::cos(az) * std::cos(el)));
+        c.stars.push_back(d);
+        glm::vec2 h(d.x, d.z);
+        float hl = glm::length(h);
+        h = hl > 1e-4f ? h / hl : glm::vec2(0.0f, 1.0f);
+        float dist = 15.0f + 30.0f * (1.0f - d.y);
+        float gx = cam.x + h.x * dist, gz = cam.z + h.y * dist;
+        c.ground.push_back(glm::vec3(gx, ilo::terrainHeightFast(gx, gz) + 0.4f, gz));
+    }
+    mConstellations.push_back(c);
+    mAuroraColor = c.color;
+    mAuroraColorMix = mAuroraColorTarget = 0.7f;
+    mWeaveAuroraBoost = 0.5f;
+    mBoonLantern = std::min(1.5f, mBoonLantern + 0.10f);
+    mGlideCap = std::min(130.0f, mGlideCap + 10.0f);
+}
+
 void Window::resetGame() {
     mFuelW = FUEL_START;
     mCollected = 0;
@@ -1093,6 +1238,12 @@ void Window::resetGame() {
     mFlareTimer = 0.0f;
     mFlareCooldown = 0.0f;
     mPulses.clear();
+    // Phase 8: forget the authored sky and its boons on a fresh start.
+    mWeavePins.clear();
+    mConstellations.clear();
+    mAuroraColorMix = mAuroraColorTarget = mWeaveAuroraBoost = 0.0f;
+    mBoonLantern = 1.0f;
+    mGlideCap = 90.0f;
     mCamera.mPosition = glm::vec3(0, 2, 18);
     mCamera.setYawPitch(0, 0);
     mFireflies.resetAll(glm::vec3(0, 2, 18));
@@ -1138,6 +1289,7 @@ void Window::renderGeometryPass() {
         f.render(pid);
     mGrass.render(pid);
     mBeaconField.render(pid);
+    mTwinField.render(pid);
     mBirds.render(pid);
     mButterflies.render(pid);
     mMushrooms.render(pid, mTime);
@@ -1205,10 +1357,36 @@ void Window::renderSky() {
     f1("uSunDiscSize", mSky.sunDiscSize);
     f1("uMoonSize", mSky.moonSize);
     f1("uStarFade", mSky.starFade);
-    f1("uAuroraStrength", mSky.auroraStrength);
+    f1("uAuroraStrength", mSky.auroraStrength + mWeaveAuroraBoost); // weave surge rides along
     f1("uGalaxyStrength", mSky.galaxyStrength);
     f1("uCloudCoverage", mSky.cloudCoverage);
     glUniform2f(glGetUniformLocation(pid, "uCloudWind"), 0.006f, 0.004f);
+
+    // Constellation weaving: in-progress pins + the live preview thread, the persisted
+    // figures (each in its own hue), and the aurora's woven colour.
+    glUniform1i(glGetUniformLocation(pid, "uPinCount"), (int)mWeavePins.size());
+    if (!mWeavePins.empty())
+        glUniform3fv(glGetUniformLocation(pid, "uPins"), (GLsizei)mWeavePins.size(), (const float *)mWeavePins.data());
+    v3("uWeaveColor", mWeaveColor);
+    v3("uWeaveCursor", glm::normalize(mCamera.mLookDir));
+    {
+        glm::vec4 cstars[MAX_CSTARS];
+        glm::vec3 ccols[MAX_CSTARS];
+        int n = 0;
+        for (const Constellation &c : mConstellations) {
+            for (size_t j = 0; j < c.stars.size() && n < MAX_CSTARS; j++, n++) {
+                cstars[n] = glm::vec4(c.stars[j], j == 0 ? 0.0f : 1.0f); // .w links to previous
+                ccols[n] = c.color;
+            }
+        }
+        glUniform1i(glGetUniformLocation(pid, "uCStarCount"), n);
+        if (n > 0) {
+            glUniform4fv(glGetUniformLocation(pid, "uCStars"), n, (const float *)cstars);
+            glUniform3fv(glGetUniformLocation(pid, "uCStarColor"), n, (const float *)ccols);
+        }
+    }
+    v3("uAuroraColor", mAuroraColor);
+    f1("uAuroraColorMix", mAuroraColorMix);
     tri.draw();
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
@@ -1288,6 +1466,8 @@ void Window::renderWater() {
     v3("uMoonColor", mSky.moonColor);
     v3("uWaterColor", glm::vec3(0.015f, 0.055f, 0.075f));
     glUniform1f(glGetUniformLocation(pid, "uStarFade"), mSky.starFade);
+    glUniform3f(glGetUniformLocation(pid, "uAuroraColor"), mAuroraColor.x, mAuroraColor.y, mAuroraColor.z);
+    glUniform1f(glGetUniformLocation(pid, "uAuroraColorMix"), mAuroraColorMix);
     glUniform1i(glGetUniformLocation(pid, "uDimpleCount"), (int)mDimples.size());
     if (!mDimples.empty())
         glUniform4fv(glGetUniformLocation(pid, "uDimple"), (GLsizei)mDimples.size(), (const float *)mDimples.data());
@@ -1471,6 +1651,19 @@ void Window::renderHud() {
     // A calm, non-urgent nudge toward the light when the lantern runs low (no alarm).
     if (mState == GameState::Playing && f <= 0.18f)
         mHud.textCentered(0.5f, 0.13f, 0.030f, "WANDER TOWARD THE LIGHT", glm::vec4(0.75f, 0.82f, 1.0f, 0.7f));
+
+    // Stargazing: a faint reticle appears when you look skyward (where you can pin a
+    // seed-star), and a calm weave hint while a constellation is in progress (Phase 8).
+    if (mState == GameState::Playing && mCamera.mLookDir.y > 0.06f) {
+        glm::vec4 dot = mWeavePins.empty() ? glm::vec4(0.70f, 0.80f, 1.0f, 0.30f) : glm::vec4(mWeaveColor, 0.9f);
+        mHud.rect(0.4985f, 0.497f, 0.0030f, 0.0055f, dot);
+    }
+    if (mState == GameState::Playing && !mWeavePins.empty()) {
+        std::snprintf(buf, sizeof(buf), "WEAVING  %d / %d", (int)mWeavePins.size(), MAX_PINS);
+        mHud.textCentered(0.5f, 0.20f, 0.026f, buf, glm::vec4(mWeaveColor, 0.9f));
+        mHud.textCentered(0.5f, 0.235f, 0.020f, "[RMB] PIN   [F] FINISH   [Q] CLEAR",
+                          glm::vec4(0.8f, 0.85f, 0.95f, 0.6f));
+    }
 
     if (mState == GameState::Intro) {
         int n = (int)std::ceil(mIntroTimer);
