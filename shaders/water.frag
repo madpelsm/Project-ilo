@@ -13,6 +13,8 @@ uniform vec3 uSkyTop, uSkyHorizon, uHorizonGlow;
 uniform vec3 uSunDir, uSunColor, uMoonDir, uMoonColor;
 uniform vec3 uWaterColor;
 uniform float uStarFade;
+uniform vec4 uDimple[12]; // fish rises: xy = centre XZ (world), z = spawn time, w unused
+uniform int uDimpleCount;
 
 vec3 reflSky(vec3 r) {
     vec3 c = mix(uSkyHorizon, uSkyTop, pow(max(r.y, 0.0), 0.5));
@@ -33,8 +35,26 @@ void main() {
     vec2 w = vWorldPos.xz;
     float a = sin(w.x * 0.6 + uTime * 0.8) + sin(w.y * 0.5 - uTime * 0.6);
     float b = sin(w.x * 0.13 - uTime * 0.3) + sin(w.y * 0.17 + uTime * 0.45);
-    vec3 N = normalize(vec3(a * 0.02 + b * 0.04, 1.0, a * 0.02 - b * 0.04));
+    vec3 nrm = vec3(a * 0.02 + b * 0.04, 1.0, a * 0.02 - b * 0.04);
 
+    // Fish rises: a ring of ripples expands and fades from each dimple, tilting the
+    // surface radially so the reflection bends and a faint bright crest catches the light.
+    float dimpleHi = 0.0;
+    for (int i = 0; i < uDimpleCount; i++) {
+        vec2 d = w - uDimple[i].xy;
+        float dist = length(d);
+        float age = uTime - uDimple[i].z;
+        float radius = age * 1.1;                       // crest expands ~1.1 m/s
+        float life = clamp(1.0 - age / 2.8, 0.0, 1.0);  // fades over ~2.8 s
+        float crest = exp(-pow((dist - radius) * 1.8, 2.0));        // leading ring
+        float inner = exp(-pow((dist - radius * 0.5) * 2.4, 2.0)) * 0.5; // trailing ripple
+        float wsum = (crest + inner) * life;
+        vec2 dir = d / max(dist, 1e-3);
+        nrm.xz += dir * wsum * 0.55; // tilt the surface radially so the reflection bends
+        dimpleHi += crest * life;
+    }
+
+    vec3 N = normalize(nrm);
     vec3 R = reflect(-V, N);
     float fres = 0.02 + 0.98 * pow(1.0 - max(dot(V, N), 0.0), 5.0);
     vec3 deep = uWaterColor * (0.5 + 0.5 * exp(-depth * 0.4)); // a touch lighter where shallow
@@ -42,6 +62,7 @@ void main() {
 
     float foam = smoothstep(0.7, 0.0, depth); // bright line right at the shoreline
     col = mix(col, vec3(0.65, 0.82, 0.88), foam * 0.5);
+    col += (uHorizonGlow + uSkyHorizon) * dimpleHi * 0.4; // crest of each fish ring catches the light
 
     FragColor = col;
 }

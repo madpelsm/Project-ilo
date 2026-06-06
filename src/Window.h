@@ -96,6 +96,9 @@ class Window {
     InstancedField mBeaconField;
     std::vector<glm::vec4> mWakeEvents; // (centreX, centreZ, igniteTime, 0)
     int mGrovesAwake = 0;
+    std::vector<glm::vec4> mDimples; // fish rises on the Mere: (x, z, spawnTime, 0)
+    float mDimpleTimer = 0.0f;       // countdown to the next rise
+    unsigned int mDimpleRng = 0x9E3779B9u;
     glm::vec2 mGrassCenter = glm::vec2(1e9f, 1e9f);
     FireflySystem mFireflies;
     MushroomField mMushrooms;

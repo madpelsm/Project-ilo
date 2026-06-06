@@ -954,6 +954,27 @@ void Window::update() {
     mSky.update(mDayPhase, mRadiance);
     mBirds.update(mDt, mTime, mSky.nightAmount);
     mButterflies.update(mDt, mTime, mSky.nightAmount);
+
+    // Fish rises on the Mere: spawn an occasional expanding ripple ring out over the
+    // open water, and retire the ones that have faded. Keeps the lake from reading dead.
+    auto drng = [&]() {
+        mDimpleRng ^= mDimpleRng << 13;
+        mDimpleRng ^= mDimpleRng >> 17;
+        mDimpleRng ^= mDimpleRng << 5;
+        return (mDimpleRng & 0xFFFFFF) / (float)0x1000000;
+    };
+    for (size_t i = 0; i < mDimples.size();) {
+        if (mTime - mDimples[i].z > 2.7f)
+            mDimples.erase(mDimples.begin() + i);
+        else
+            ++i;
+    }
+    mDimpleTimer -= mDt;
+    if (mDimpleTimer <= 0.0f && (int)mDimples.size() < 12) {
+        mDimpleTimer = 0.5f + drng() * 1.1f;
+        float ang = drng() * 6.2831853f, rad = 18.0f + drng() * 112.0f; // over the open lake
+        mDimples.push_back(glm::vec4(std::cos(ang) * rad, std::sin(ang) * rad, mTime, 0.0f));
+    }
     for (size_t i = 0; i < mPulses.size();) {
         mPulses[i].age += mDt;
         if (mPulses[i].age >= mPulses[i].life)
@@ -1267,6 +1288,9 @@ void Window::renderWater() {
     v3("uMoonColor", mSky.moonColor);
     v3("uWaterColor", glm::vec3(0.015f, 0.055f, 0.075f));
     glUniform1f(glGetUniformLocation(pid, "uStarFade"), mSky.starFade);
+    glUniform1i(glGetUniformLocation(pid, "uDimpleCount"), (int)mDimples.size());
+    if (!mDimples.empty())
+        glUniform4fv(glGetUniformLocation(pid, "uDimple"), (GLsizei)mDimples.size(), (const float *)mDimples.data());
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, gBuffer.color(0));
     glBindVertexArray(mWaterVao);
