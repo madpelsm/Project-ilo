@@ -1,5 +1,9 @@
 #include "Window.h"
 
+#include "Screenshot.h"
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <thread>
 Window::Window() {
     mWidth = 800;
@@ -397,11 +401,37 @@ void Window::run() {
         std::cout << "Window not initialised" << std::endl;
         return;
     }
+
+    // Headless verification harness: when ILO_SHOT is set the app runs without
+    // input, advances a fixed number of frames, captures the back buffer to a
+    // PPM, and exits. ILO_CAM="x,y,z,yaw,pitch" frames the scene deterministically.
+    const char *shotPath = std::getenv("ILO_SHOT");
+    const char *shotFrameEnv = std::getenv("ILO_SHOT_FRAME");
+    const char *camEnv = std::getenv("ILO_CAM");
+    int shotFrame = shotFrameEnv ? std::atoi(shotFrameEnv) : 90;
+    int frame = 0;
+
+    if (shotPath && camEnv) {
+        float x, y, z, yaw, pitch;
+        if (std::sscanf(camEnv, "%f,%f,%f,%f,%f", &x, &y, &z, &yaw, &pitch) == 5) {
+            mCamera.mPosition = glm::vec3(x, y, z);
+            mCamera.mLookDir = glm::normalize(glm::vec3(
+                std::cos(pitch) * std::sin(yaw), std::sin(pitch), -std::cos(pitch) * std::cos(yaw)));
+            mCamera.update();
+        }
+    }
+
     while (!closed) {
-        checkEvents();
+        if (!shotPath)
+            checkEvents();
         update();
         upload();
         render();
+        if (shotPath && ++frame >= shotFrame) {
+            ilo::savePPM(shotPath, mWidth, mHeight);
+            std::cout << "Saved screenshot to " << shotPath << " (" << mWidth << "x" << mHeight << ")" << std::endl;
+            break;
+        }
     }
 }
 
