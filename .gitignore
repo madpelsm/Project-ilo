@@ -60,3 +60,8 @@ $RECYCLE.BIN/
 Network Trash Folder
 Temporary Items
 .apdisk
+
+# Editor swap/backup files
+*.swp
+*.swo
+*~
