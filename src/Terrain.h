@@ -52,6 +52,11 @@ inline float terrainHeight(float x, float z) {
     return bowl + ridge + basin + hills;
 }
 
+// Fast height query via a cached, bilerp'd grid (built by Terrain::build). Falls back
+// to the analytic terrainHeight before the cache exists. Use this for per-frame queries
+// (grass, ground-follow, creatures) — the analytic version is sinf-heavy.
+float terrainHeightFast(float x, float z);
+
 class Terrain {
   public:
     void build(float extent, int n); // extent = half-size (m); n = vertices per side

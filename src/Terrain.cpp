@@ -1,7 +1,39 @@
 #include "Terrain.h"
 #include <glm/glm.hpp>
+#include <vector>
 
 namespace ilo {
+
+// --- cached heightfield for cheap per-frame queries ---
+namespace {
+std::vector<float> gCache;
+int gCacheN = 0;
+float gCacheExtent = 0.0f, gCacheStep = 2.0f;
+} // namespace
+
+float terrainHeightFast(float x, float z) {
+    if (gCacheN <= 1)
+        return terrainHeight(x, z);
+    float fx = (x + gCacheExtent) / gCacheStep, fz = (z + gCacheExtent) / gCacheStep;
+    if (fx < 0.0f || fz < 0.0f || fx >= gCacheN - 1 || fz >= gCacheN - 1)
+        return terrainHeight(x, z);
+    int ix = (int)fx, iz = (int)fz;
+    float tx = fx - ix, tz = fz - iz;
+    const float *c = gCache.data();
+    float h00 = c[iz * gCacheN + ix], h10 = c[iz * gCacheN + ix + 1];
+    float h01 = c[(iz + 1) * gCacheN + ix], h11 = c[(iz + 1) * gCacheN + ix + 1];
+    return (h00 * (1 - tx) + h10 * tx) * (1 - tz) + (h01 * (1 - tx) + h11 * tx) * tz;
+}
+
+static void buildHeightCache(float extent) {
+    gCacheExtent = extent;
+    gCacheStep = 2.0f;
+    gCacheN = (int)(2.0f * extent / gCacheStep) + 2;
+    gCache.assign((size_t)gCacheN * gCacheN, 0.0f);
+    for (int j = 0; j < gCacheN; j++)
+        for (int i = 0; i < gCacheN; i++)
+            gCache[(size_t)j * gCacheN + i] = terrainHeight(-extent + i * gCacheStep, -extent + j * gCacheStep);
+}
 
 // Colour the land by height and slope: shore sand -> meadow grass -> rock -> snow.
 static glm::vec3 terrainColor(float x, float z, float h, const glm::vec3 &n) {
@@ -23,6 +55,7 @@ static glm::vec3 terrainColor(float x, float z, float h, const glm::vec3 &n) {
 
 void Terrain::build(float extent, int n) {
     worldExtent = extent;
+    buildHeightCache(extent); // cheap bilerp queries for grass/ground-follow/creatures
     std::vector<Vertex2> verts;
     verts.reserve((size_t)n * n);
     const glm::vec3 mtl(10.0f, 0.06f, 0.0f); // low shininess, faint spec

@@ -31,6 +31,7 @@ uniform float uFogBaseY;
 uniform sampler2D uSkyTex;  // half-res procedural sky (background + atmosphere)
 uniform vec3 uSunDir;       // toward the sun
 uniform vec3 uSunlight;     // directional radiance (colour * intensity), ~0 at night
+uniform vec3 uRimColor;     // sky-tinted rim light on silhouette edges
 
 vec3 applyFog(vec3 col, vec3 P) {
     float dist = length(P - eyePos);
@@ -89,6 +90,11 @@ void main() {
         float att = (window * window) / (d2 + 1.0) * lights[i].colorIntensity.w;
         lit += att * lights[i].colorIntensity.rgb * (diff * albedo + spec);
     }
+
+    // Rim / sky light: a fresnel sheen on silhouette edges, tinted by the sky and lifted
+    // by how skyward the surface faces — gives the low-poly forms a soft glowing edge.
+    float rim = pow(1.0 - max(dot(N, V), 0.0), 3.0) * (0.4 + 0.6 * max(N.y, 0.0));
+    lit += rim * uRimColor * albedo;
 
     lit = applyFog(lit, P);
     lit += albedo * emissive; // emissive after fog so glowing sources punch through

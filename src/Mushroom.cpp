@@ -82,7 +82,7 @@ void MushroomField::init(int clusters) {
             Mushroom s;
             float sx = center.x + randRange(-2.0f, 2.0f);
             float sz = center.z + randRange(-2.0f, 2.0f);
-            s.pos = glm::vec3(sx, ilo::terrainHeight(sx, sz), sz); // sit on the ground
+            s.pos = glm::vec3(sx, ilo::terrainHeightFast(sx, sz), sz); // sit on the ground
             s.color = col;
             s.phase = randRange(0.0f, 6.2831853f);
             mShrooms.push_back(s);

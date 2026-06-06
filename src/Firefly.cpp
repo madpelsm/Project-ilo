@@ -55,7 +55,7 @@ void FireflySystem::spawn(Firefly &f, const glm::vec3 &camPos) {
             break;
     }
     // Hover a little above the ground (or above the water over the lake).
-    float ground = std::max(0.0f, ilo::terrainHeight(f.x, f.z));
+    float ground = std::max(0.0f, ilo::terrainHeightFast(f.x, f.z));
     f.baseY = ground + randRange(SPAWN_Y_MIN, SPAWN_Y_MAX);
     f.skittish = randf() < SKITTISH_FRACTION;
     f.color = pickColor(f.skittish);

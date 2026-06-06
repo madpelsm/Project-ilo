@@ -50,8 +50,15 @@ void main() {
     vec3 warm = vec3(1.10, 1.00, 0.84);
     mapped *= mix(cool, warm, uFuel);
 
-    mapped += (hash21(gl_FragCoord.xy) - 0.5) / 255.0; // dither to kill banding
-    vec3 outc = pow(mapped, vec3(1.0 / 2.2));           // single gamma, last
+    // Curated film grade: richer saturation + a gentle s-curve for punchier mids,
+    // and teal-lifted shadows / warm highlights for a cinematic look.
+    float l = dot(mapped, vec3(0.299, 0.587, 0.114));
+    mapped = mix(vec3(l), mapped, 1.14);                                   // saturation
+    mapped = mix(mapped, mapped * mapped * (3.0 - 2.0 * mapped), 0.18);    // soft contrast
+    mapped += (vec3(0.0, 0.015, 0.03) * (1.0 - l) - vec3(0.0, 0.0, 0.01) * l); // teal shadows
+
+    vec3 outc = pow(max(mapped, vec3(0.0)), vec3(1.0 / 2.2)); // single gamma, last (guard <0)
+    outc += (hash21(gl_FragCoord.xy) - 0.5) / 255.0;          // dither in display space
 
     // Film grain (animated, luminance-scaled so highlights stay clean).
     float g = hash21(gl_FragCoord.xy + fract(uTime) * 311.7) - 0.5;
