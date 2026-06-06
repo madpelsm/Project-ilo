@@ -74,7 +74,9 @@ struct Sky {
         fogColor = mix3(nightFog, dayFog, dayAmt) + horizonGlow * 0.10f;
         glm::vec3 nightAmb(0.012f, 0.016f, 0.028f), dayAmb(0.24f, 0.27f, 0.32f);
         ambient = mix3(nightAmb, dayAmb, dayAmt);
-        fogDensity = mix3(glm::vec3(0.035f), glm::vec3(0.018f), dayAmt).x;
+        // Gentle aerial-perspective fog: distant terrain melts into the sky over
+        // hundreds of metres (this is the cue that sells the vastness).
+        fogDensity = mix3(glm::vec3(0.0017f), glm::vec3(0.0011f), dayAmt).x;
 
         // Night-only flourishes.
         starFade = 1.0f - smooth(-0.16f, 0.04f, e);

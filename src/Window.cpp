@@ -73,6 +73,7 @@ void Window::sdlDie() {
     // alive, so their destructors free their own GL resources; don't touch them here.
     mFireflies.destroy();
     mMushrooms.destroy();
+    mTerrain.destroy();
     mHud.destroy();
     destroyFramebuffers();
     tri.destroy();
@@ -266,8 +267,9 @@ void Window::initAssets() {
     }
     if (mProps)
         mProps->initGL();
+    mTerrain.build(896.0f, 320);
     mFireflies.init(60);
-    mMushrooms.init(8);
+    mMushrooms.init(10);
 }
 
 void Window::stepFrameWeb() {
@@ -314,6 +316,8 @@ void Window::run() {
         mDayPhase = (float)std::atof(dEnv); // testing knob: hold a fixed time of day
         mFreezeDay = true;
     }
+    if (std::getenv("ILO_FLY"))
+        mFreeCam = true; // aerial screenshots: use the raw ILO_CAM height (no ground-follow)
     if (shotPath && camEnv) {
         float x, y, z, yaw, pitch;
         if (std::sscanf(camEnv, "%f,%f,%f,%f,%f", &x, &y, &z, &yaw, &pitch) == 5) {
@@ -364,10 +368,12 @@ void Window::checkEvents() {
             mCamera.moveRight(-speed);
         if (state[SDL_SCANCODE_D])
             mCamera.moveRight(speed);
+        // Rise/sink relative to the ground (ground-follow keeps you on the surface
+        // at mEyeOffset; raising it lets you drift up and glide tranquilly).
         if (state[SDL_SCANCODE_SPACE])
-            mCamera.moveUp(FLY_VERT_SPEED * mDt);
+            mEyeOffset = std::min(90.0f, mEyeOffset + FLY_VERT_SPEED * mDt);
         if (state[SDL_SCANCODE_LCTRL] || state[SDL_SCANCODE_C])
-            mCamera.moveUp(-FLY_VERT_SPEED * mDt);
+            mEyeOffset = std::max(1.8f, mEyeOffset - FLY_VERT_SPEED * mDt);
     }
 
     while (SDL_PollEvent(&event)) {
@@ -521,6 +527,13 @@ void Window::packLights() {
 }
 
 void Window::update() {
+    // Ground-follow: ride the terrain at eye height (raise mEyeOffset to fly up).
+    if (!mFreeCam) {
+        float g = ilo::terrainHeight(mCamera.mPosition.x, mCamera.mPosition.z) + mEyeOffset;
+        mCamera.mPosition.y = g;
+        mCamera.update();
+    }
+
     // Floating origin: snap to a 128m grid near the camera (only the XZ plane).
     mRenderOrigin = glm::vec3(std::round(mCamera.mPosition.x / 128.0f) * 128.0f, 0.0f,
                               std::round(mCamera.mPosition.z / 128.0f) * 128.0f);
@@ -623,7 +636,7 @@ void Window::addDeer(Player &deer, float x, float z) {
     d.tz = z;
     d.pause = 1.0f + 3.0f * ((x * 13.0f + z * 7.0f) - std::floor(x * 13.0f + z * 7.0f));
     mDeer.push_back(d);
-    deer.setTransform(x, 0.0f, z, 0.0f);
+    deer.setTransform(x, ilo::terrainHeight(x, z), z, 0.0f);
 }
 
 void Window::updateDeer() {
@@ -642,8 +655,8 @@ void Window::updateDeer() {
                 b = b - std::floor(b);
                 float ang = a * 6.2831f;
                 float rad = 4.0f + 8.0f * b;
-                d.tx = std::max(-18.0f, std::min(18.0f, d.x + std::cos(ang) * rad));
-                d.tz = std::max(-18.0f, std::min(18.0f, d.z + std::sin(ang) * rad));
+                d.tx = std::max(-520.0f, std::min(520.0f, d.x + std::cos(ang) * rad));
+                d.tz = std::max(-520.0f, std::min(520.0f, d.z + std::sin(ang) * rad));
                 d.pause = 2.5f + 3.5f * a;
             }
         } else {
@@ -653,7 +666,7 @@ void Window::updateDeer() {
             d.yaw = std::atan2(dx, dz);
         }
         if (d.p)
-            d.p->setTransform(d.x, 0.0f, d.z, 0.0f);
+            d.p->setTransform(d.x, ilo::terrainHeight(d.x, d.z), d.z, 0.0f);
     }
 }
 
@@ -700,6 +713,7 @@ void Window::renderGeometryPass() {
     }
     // Procedurally generated meshes are drawn double-sided (their winding varies).
     glDisable(GL_CULL_FACE);
+    mTerrain.render(pid);
     if (mProps)
         mProps->render(pid);
     mMushrooms.render(pid, mTime);

@@ -1,10 +1,11 @@
 #include "Firefly.h"
+#include "Terrain.h"
 #include <algorithm>
 #include <cmath>
 
 namespace {
 // Tuning (from the design spec).
-const float AREA = 18.0f;        // motes roam X,Z in [-AREA, AREA]
+const float AREA = 150.0f;       // motes roam X,Z in [-AREA, AREA]
 const float WANDER_SPEED = 0.6f;
 const float BOB_AMPLITUDE = 0.25f;
 const float BOB_FREQ = 0.8f;
@@ -53,7 +54,9 @@ void FireflySystem::spawn(Firefly &f, const glm::vec3 &camPos) {
         if (dHeart > 3.0f && dCam > 4.0f)
             break;
     }
-    f.baseY = randRange(SPAWN_Y_MIN, SPAWN_Y_MAX);
+    // Hover a little above the ground (or above the water over the lake).
+    float ground = std::max(0.0f, ilo::terrainHeight(f.x, f.z));
+    f.baseY = ground + randRange(SPAWN_Y_MIN, SPAWN_Y_MAX);
     f.skittish = randf() < SKITTISH_FRACTION;
     f.color = pickColor(f.skittish);
     f.phase = randRange(0.0f, 6.2831f);

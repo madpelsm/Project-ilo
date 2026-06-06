@@ -7,6 +7,7 @@
 #include "Player.h"
 #include "Render.h"
 #include "Sky.h"
+#include "Terrain.h"
 #include "Shader.h"
 #include "ShaderProgram.h"
 #include <SDL2/SDL.h>
@@ -73,9 +74,12 @@ class Window {
     Player *mForest = nullptr;
     Player *mHeart = nullptr;
     Player *mProps = nullptr; // procedural trees + rocks (double-sided)
+    ilo::Terrain mTerrain;
     FireflySystem mFireflies;
     MushroomField mMushrooms;
     Hud mHud;
+    float mEyeOffset = 1.8f; // camera height above the ground (rises when flying)
+    bool mFreeCam = false;   // disable ground-follow (aerial screenshots)
 
     // lights packed each frame; [0] is the lantern
     std::vector<ilo::OmniLightGPU> mLights;

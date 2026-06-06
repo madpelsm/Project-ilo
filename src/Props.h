@@ -100,19 +100,26 @@ inline void tree(Mesh &m, glm::vec3 at, Rng &rng) {
 
 // A grove of trees and rocks scattered in the ring [inner, outer], leaving the
 // centre clearing open for the Heart. One static mesh.
-inline Mesh makeGroveProps(unsigned int seed, int treeCount, int rockCount, float inner, float outer) {
+inline Mesh makeGroveProps(unsigned int seed, int treeCount, int rockCount, float inner, float outer,
+                           float (*heightFn)(float, float) = nullptr) {
     Mesh m;
     Rng rng(seed);
+    auto groundY = [&](float x, float z) { return heightFn ? heightFn(x, z) : 0.0f; };
     for (int i = 0; i < treeCount; i++) {
         float ang = rng.range(0, 6.2831853f);
         float rad = rng.range(inner, outer);
-        tree(m, glm::vec3(std::cos(ang) * rad, 0, std::sin(ang) * rad), rng);
+        float x = std::cos(ang) * rad, z = std::sin(ang) * rad;
+        float y = groundY(x, z);
+        if (y < 0.5f)
+            continue; // don't plant trees in the lake / on the shoreline
+        tree(m, glm::vec3(x, y, z), rng);
     }
     for (int i = 0; i < rockCount; i++) {
         float ang = rng.range(0, 6.2831853f);
-        float rad = rng.range(2.5f, outer);
-        float gray = rng.range(0.10f, 0.20f);
-        rock(m, glm::vec3(std::cos(ang) * rad, -0.05f, std::sin(ang) * rad), rng.range(0.2f, 0.55f), rng,
+        float rad = rng.range(inner * 0.5f, outer);
+        float x = std::cos(ang) * rad, z = std::sin(ang) * rad;
+        float gray = rng.range(0.08f, 0.16f);
+        rock(m, glm::vec3(x, groundY(x, z) - 0.1f, z), rng.range(0.25f, 0.7f), rng,
              glm::vec3(gray, gray, gray * 1.1f));
     }
     return m;

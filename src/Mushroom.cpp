@@ -1,5 +1,6 @@
 #include "Mushroom.h"
 #include "Props.h"
+#include "Terrain.h"
 #include <algorithm>
 #include <cmath>
 
@@ -73,13 +74,15 @@ void MushroomField::init(int clusters) {
     // Scatter clusters of mushrooms around the grove (avoiding the very centre).
     for (int c = 0; c < clusters; c++) {
         float ang = randRange(0, 6.2831853f);
-        float rad = randRange(5.0f, 18.0f);
+        float rad = randRange(130.0f, 520.0f);
         glm::vec3 center(std::cos(ang) * rad, 0, std::sin(ang) * rad);
         glm::vec3 col = palette(randf());
         int n = 3 + (int)(randf() * 4.0f);
         for (int i = 0; i < n; i++) {
             Mushroom s;
-            s.pos = center + glm::vec3(randRange(-1.4f, 1.4f), 0.0f, randRange(-1.4f, 1.4f));
+            float sx = center.x + randRange(-2.0f, 2.0f);
+            float sz = center.z + randRange(-2.0f, 2.0f);
+            s.pos = glm::vec3(sx, ilo::terrainHeight(sx, sz), sz); // sit on the ground
             s.color = col;
             s.phase = randRange(0.0f, 6.2831853f);
             mShrooms.push_back(s);
