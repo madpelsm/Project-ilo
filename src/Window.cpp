@@ -59,13 +59,13 @@ Window::~Window() {
 }
 
 void Window::sdlDie() {
-    if (closed)
+    if (mDestroyed)
         return;
+    mDestroyed = true;
     closed = true;
     std::cout << "killing SDL" << std::endl;
-    for (unsigned int i = 0; i < mGameObjects.size(); i++) {
-        mGameObjects[i]->cleanup();
-    }
+    // The Player objects are owned (and deleted) by main while the context is still
+    // alive, so their destructors free their own GL resources; don't touch them here.
     mFireflies.destroy();
     mHud.destroy();
     destroyFramebuffers();

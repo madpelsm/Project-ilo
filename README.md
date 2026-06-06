@@ -1,34 +1,47 @@
-# Project-Ilo
-<h1>Controls</h1>
-<b>Q</b>: rotate left </br>
-<b>E</b>: rotate right </br>
-<b>W</b>: move forward </br>
-<b>A</b>: move left </br>
-<b>S</b>: move back </br>
-<b>D</b>: move right </br>
-<b>R</b>: remove last placed light</br>
-<b>R+LEFT CTRL</b>: remove last placed object</br>
-<b>R+LEFT ALT</b>: remove all placed light</br>
-<b>LEFT MOUSE</b>: place object and light</br>
-<b>RIGHT MOUSE</b>: detach object from user mouse control</br>
+# Project Ilo — Firefly Grove
 
-<h3>object selection</h3>
-<p>Select the object using the numbers on the keyboard.</p>
+A small hand-written C++/OpenGL game. Night has fallen on an enchanted forest and
+your lantern is going cold. Fireflies are the only other light in the dark — catch
+them to refuel your lantern and wake the **Heart of the Grove**. Gather enough and
+the grove blazes back to life; let your lantern die and you are lost in the dark.
 
+It runs on a custom deferred renderer with an HDR pipeline: many dynamic point
+lights, bloom, ACES tone mapping, emissive materials, atmospheric fog and a moonlit
+sky.
 
+## How to play
 
-<b>Camera Controls</b>: Like you would in any FPS-game. so far </br>
+- **Goal:** collect **30 fireflies**. Each one you catch refuels your lantern and
+  brightens the Heart of the Grove at the centre of the forest.
+- **Warmth:** your lantern's warmth constantly drains. As it falls the pool of light
+  shrinks and the dark closes in. If it reaches zero, the run is over.
+- **Skittish fireflies** (cooler, whiter glow) flee when you get close and are worth
+  more — corner them with a flare.
 
-<h3>Designing your own levels</h3>
-<p>You can design your own levels using any 3D editor, like Blender. Export it as .obj with material info in the .mtl file (Blender generates this). As for the material properties, following are the terms in blender with ther corresponding meaning in Ilo: </br></br> 
-<b>Diffuse</b>: the color of the object  </br>
-<b>Hardness</b>: This will be the shininess of the object </br>
-<b>Intensity</b>(under specular): This will be define the specular strength</br>
-</br></br>
-I auto set the ambient to 0 when importing, this is more realistic in most cases, however, this makes it not possible to make an object appear to emit light.
-</p>
-</br>
-<h3>Build</h3>
-<p>
-Build with SDL2-2.0.4, glm, and glad.
-</p>
+## Controls
+
+- **W A S D** — move
+- **Mouse** — look
+- **Space / Ctrl (or C)** — fly up / down
+- **Shift** — sprint (burns warmth faster)
+- **Left mouse** — lantern flare: spend a little warmth for a short, bright burst
+- **P** — pause, **R** — restart, **Esc** — quit
+- **Alt+Enter / F11** — fullscreen
+
+## Build
+
+Dependencies: SDL2, GLM, and a generated [glad](https://glad.dav1d.de/) GL 3.3 core
+loader in `glad/` (`glad/include/`, `glad/src/glad.c`).
+
+```sh
+mkdir build && cd build
+cmake .. -DCMAKE_BUILD_TYPE=Release
+make -j
+./ilo
+```
+
+## Designing your own levels
+
+Geometry is loaded from `.obj` files (with `.mtl` materials) in `shapes/`. Material
+terms map to Ilo as: **Diffuse** = object colour, **Hardness** = shininess,
+**Specular intensity** = specular strength. The grove is assembled in `src/main.cpp`.

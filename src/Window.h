@@ -30,6 +30,7 @@ class Window {
     int mWidth, mHeight, baseObjects = 0;
     std::string mTitle;
     bool closed = false;
+    bool mDestroyed = false;
     bool windowInitialised = false;
     short frames = 0;
     bool vSync = true, fullscreen = false, windowMaximised = false;

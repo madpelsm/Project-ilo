@@ -3,8 +3,10 @@
 #include <glad/glad.h>
 #include <stdio.h>
 #include <vector>
+#ifdef _MSC_VER
 #pragma warning(disable : 4996)
 #define _CRT_SECURE_NO_DEPRECATE
+#endif
 #include <iostream>
 class Shader {
   public:

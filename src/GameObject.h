@@ -8,5 +8,6 @@
 #include <vector>
 class GameObject {
   public:
+    virtual ~GameObject() = default;
     virtual void render(int shaderProgram) = 0;
 };
