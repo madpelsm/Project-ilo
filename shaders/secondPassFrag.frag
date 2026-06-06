@@ -39,12 +39,19 @@ uniform vec3 uRimColor;     // sky-tinted rim light on silhouette edges
 // only injects precision for sampler2D, and the qualifier is accepted-and-ignored on
 // desktop GLSL 330 — so this one declaration compiles on both targets.
 uniform highp sampler2DShadow uShadowMap;
-uniform mat4 uLightVP;          // origin-relative world -> sun light clip
+uniform mat4 uLightVP;          // origin-relative world -> sun light clip (near cascade)
 uniform float uShadowTexel;     // 1/res (PCF tap step in shadow UV)
 uniform float uShadowTexelWorld;// world metres per texel (normal-offset scale)
 uniform float uShadowBias;      // constant NDC compare floor
 uniform float uShadowStrength;  // 0..1 sun-elevation/night fade (0 disables)
 uniform int uShadowDebug;       // 1 = output the shadow factor as grayscale
+// Far cascade — a 4x-wider map so distant casters cast too.
+uniform highp sampler2DShadow uShadowMapFar;
+uniform mat4 uLightVPFar;
+uniform float uShadowTexelFar;
+uniform float uShadowTexelWorldFar;
+uniform float uShadowBiasFar;
+uniform int uNoFarShadow;
 
 vec3 applyFog(vec3 col, vec3 P) {
     float dist = length(P - eyePos);
@@ -54,24 +61,46 @@ vec3 applyFog(vec3 col, vec3 P) {
     return mix(uFogColor, col, fog); // fog==1 -> unfogged
 }
 
-// Soft sun shadow: project the receiver (nudged along its normal to kill acne without
-// peter-panning) into light space and average a 3x3 hardware-PCF compare. 1 lit .. 0
-// shadowed. Early-out when the sun is down (no sampler fetch). Out-of-map / beyond-far
-// reads as lit (WebGL2 has no CLAMP_TO_BORDER).
-float sunShadow(vec3 P, vec3 N, float ndl) {
-    if (uShadowStrength <= 0.0)
-        return 1.0;
-    vec3 Po = P + N * uShadowTexelWorld * (1.0 + 2.0 * (1.0 - clamp(ndl, 0.0, 1.0)));
-    vec4 lc = uLightVP * vec4(Po, 1.0);
-    vec3 q = lc.xyz / lc.w * 0.5 + 0.5;
-    if (q.z > 1.0 || q.x < 0.0 || q.x > 1.0 || q.y < 0.0 || q.y > 1.0)
-        return 1.0;
-    float ref = q.z - uShadowBias;
+// 3x3 hardware-PCF (each tap a free 2x2 bilinear compare -> ~6x6 soft footprint).
+float pcf(highp sampler2DShadow sm, vec2 uv, float ref, float texel) {
     float s = 0.0;
     for (int j = -1; j <= 1; j++)
         for (int i = -1; i <= 1; i++)
-            s += texture(uShadowMap, vec3(q.xy + vec2(float(i), float(j)) * uShadowTexel, ref));
+            s += texture(sm, vec3(uv + vec2(float(i), float(j)) * texel, ref));
     return s / 9.0;
+}
+float sampleFar(vec3 P, vec3 N, float no) {
+    vec3 Po = P + N * uShadowTexelWorldFar * no;
+    vec4 lc = uLightVPFar * vec4(Po, 1.0);
+    vec3 q = lc.xyz / lc.w * 0.5 + 0.5;
+    if (q.z > 1.0 || q.x < 0.0 || q.x > 1.0 || q.y < 0.0 || q.y > 1.0)
+        return 1.0;
+    return pcf(uShadowMapFar, q.xy, q.z - uShadowBiasFar, uShadowTexelFar);
+}
+// Soft cascaded sun shadow: the crisp 128m near map where it covers, the wide far map
+// beyond, with a blend ring over the near edge to hide the seam. Receiver nudged along
+// its normal to kill acne. 1 lit .. 0 shadowed; out-of-both = lit; off at night.
+float sunShadow(vec3 P, vec3 N, float ndl) {
+    if (uShadowStrength <= 0.0)
+        return 1.0;
+    float no = 1.0 + 2.0 * (1.0 - clamp(ndl, 0.0, 1.0)); // grazing-angle normal-offset
+    vec3 Po = P + N * uShadowTexelWorld * no;
+    vec4 lc = uLightVP * vec4(Po, 1.0);
+    vec3 q = lc.xyz / lc.w * 0.5 + 0.5;
+    float inset = uShadowTexel * 1.5;
+    bool inNear = q.z <= 1.0 && q.x >= inset && q.x <= 1.0 - inset && q.y >= inset && q.y <= 1.0 - inset;
+    if (inNear) {
+        float nearSh = pcf(uShadowMap, q.xy, q.z - uShadowBias, uShadowTexel);
+        if (uNoFarShadow == 1)
+            return nearSh;
+        float edge = smoothstep(0.85, 1.0, max(abs(q.x * 2.0 - 1.0), abs(q.y * 2.0 - 1.0)));
+        if (edge > 0.0)
+            return mix(nearSh, sampleFar(P, N, no), edge);
+        return nearSh;
+    }
+    if (uNoFarShadow == 1)
+        return 1.0;
+    return sampleFar(P, N, no);
 }
 
 void main() {

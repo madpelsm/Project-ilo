@@ -75,12 +75,17 @@ class Window {
     float mShadowStrength = 0.0f; // sun-elevation/night fade (0 = off)
     int mShadowDebug = 0;
     bool mNoShadow = false;
+    // Far cascade: a second, 4x-wider sun map so distant ridge-trees cast too.
+    int mShadowResFar = 1024;
+    float mShadowRadiusFar = 512.0f;
+    glm::mat4 mLightVPFar = glm::mat4(1.0f);
+    bool mNoFarShadow = false;
     GLuint mWaterVao = 0, mWaterVbo = 0;
     GLuint mParticleVao = 0, mParticleVbo = 0;
     int mParticleCount = 0;
 
     // render targets + helpers
-    ilo::Framebuffer gBuffer, hdrFBO, bloomA, bloomB, skyFBO, godrayFBO, ssaoFBO, ssaoBlurFBO, shadowFBO;
+    ilo::Framebuffer gBuffer, hdrFBO, bloomA, bloomB, skyFBO, godrayFBO, ssaoFBO, ssaoBlurFBO, shadowFBO, shadowFarFBO;
     ilo::ScreenTri tri;
     ilo::LightUBO lightUBO;
     GLuint mBlackTex = 0;

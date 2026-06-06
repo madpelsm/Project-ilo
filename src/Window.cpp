@@ -260,6 +260,7 @@ void Window::initGL() {
     glUniform1i(glGetUniformLocation(lp, "uSkyTex"), 4);
     glUniform1i(glGetUniformLocation(lp, "uAO"), 5);
     glUniform1i(glGetUniformLocation(lp, "uShadowMap"), 6);
+    glUniform1i(glGetUniformLocation(lp, "uShadowMapFar"), 7);
     glUniformBlockBinding(lp, glGetUniformBlockIndex(lp, "LightBlock"), 0);
 
     // SSAO: hemisphere kernel (clustered toward the surface) + a 4x4 rotation tile,
@@ -424,6 +425,14 @@ void Window::createFramebuffers() {
     shadowFBO.create(mShadowRes, mShadowRes);
     shadowFBO.addDepthTexture(GL_DEPTH_COMPONENT24);
     shadowFBO.complete("shadowFBO");
+#ifdef __EMSCRIPTEN__
+    mShadowResFar = 1024;
+#else
+    mShadowResFar = mLowSpec ? 1024 : 2048;
+#endif
+    shadowFarFBO.create(mShadowResFar, mShadowResFar);
+    shadowFarFBO.addDepthTexture(GL_DEPTH_COMPONENT24);
+    shadowFarFBO.complete("shadowFarFBO");
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
@@ -438,6 +447,7 @@ void Window::destroyFramebuffers() {
     ssaoFBO.destroy();
     ssaoBlurFBO.destroy();
     shadowFBO.destroy();
+    shadowFarFBO.destroy();
     mBloomReady = false;
 }
 
@@ -839,6 +849,8 @@ void Window::run() {
         captureJournal();
     if (std::getenv("ILO_NOSHADOW"))
         mNoShadow = true; // A/B: force the sun shadow off
+    if (std::getenv("ILO_NOFARSHADOW"))
+        mNoFarShadow = true; // A/B: near cascade only
     if (const char *sd = std::getenv("ILO_SHADOWDEBUG"))
         mShadowDebug = std::atoi(sd); // 1 = grayscale shadow factor
 
@@ -1917,55 +1929,72 @@ void Window::renderShadowPass() {
     if (mShadowStrength <= 0.0f)
         return;
 
-    // A camera-centred orthographic frustum in ORIGIN-RELATIVE space, texel-snapped so
-    // the shadow is world-locked and never shimmers as the camera walks.
-    glm::vec3 center = mCamera.mPosition - mRenderOrigin;
-    glm::vec3 sun = glm::normalize(mSky.sunDir); // toward the sun
-    const float R = mShadowRadius, D = 250.0f;
+    glm::vec3 center = mCamera.mPosition - mRenderOrigin; // origin-relative camera
+    glm::vec3 sun = glm::normalize(mSky.sunDir);          // toward the sun
     glm::vec3 up(0.0f, 1.0f, 0.0f); // Sky.sunDir keeps a -0.35 z, never parallel to +Y
-    glm::mat4 lightView = glm::lookAt(center + sun * D, center, up);
-    glm::mat4 lightProj = glm::ortho(-R, R, -R, R, 0.0f, 2.0f * D);
-    float texelWorld = 2.0f * R / (float)mShadowRes;
-    glm::vec4 cLS = lightView * glm::vec4(center, 1.0f);
-    cLS.x = std::floor(cLS.x / texelWorld) * texelWorld;
-    cLS.y = std::floor(cLS.y / texelWorld) * texelWorld;
-    glm::vec3 cWS = glm::vec3(glm::inverse(lightView) * glm::vec4(cLS.x, cLS.y, cLS.z, 1.0f));
-    lightView = glm::lookAt(cWS + sun * D, cWS, up);
-    mLightVP = lightProj * lightView;
 
-    shadowFBO.bind();
-    glViewport(0, 0, mShadowRes, mShadowRes);
+    // A camera-centred orthographic frustum, texel-snapped so the shadow is world-locked
+    // and never shimmers as the camera walks.
+    auto buildSnappedVP = [&](float R, float D, int res) {
+        glm::mat4 view = glm::lookAt(center + sun * D, center, up);
+        glm::mat4 proj = glm::ortho(-R, R, -R, R, 0.0f, 2.0f * D);
+        float texelWorld = 2.0f * R / (float)res;
+        glm::vec4 cLS = view * glm::vec4(center, 1.0f);
+        cLS.x = std::floor(cLS.x / texelWorld) * texelWorld;
+        cLS.y = std::floor(cLS.y / texelWorld) * texelWorld;
+        glm::vec3 cWS = glm::vec3(glm::inverse(view) * glm::vec4(cLS.x, cLS.y, cLS.z, 1.0f));
+        view = glm::lookAt(cWS + sun * D, cWS, up);
+        return proj * view;
+    };
+    mLightVP = buildSnappedVP(mShadowRadius, 250.0f, mShadowRes);
+    mLightVPFar = buildSnappedVP(mShadowRadiusFar, 1000.0f, mShadowResFar);
+
+    shadowProg.useProgram();
+    GLuint pid = shadowProg.getProgramID();
+    glUniform3f(glGetUniformLocation(pid, "uOriginOffset"), mRenderOrigin.x, mRenderOrigin.y, mRenderOrigin.z);
+    glUniform2f(glGetUniformLocation(pid, "uWind"), 0.45f, 0.30f); // identical to the geometry pass
+    glUniform1f(glGetUniformLocation(pid, "time"), mTime);
+
+    // Re-run the caster subset (same order as renderGeometryPass so model/grassWave
+    // uniform inheritance matches). Skipped: grass/motes/seed/fireflies/birds/butterflies/
+    // beacons — animated/glowy/tiny; casting them would shimmer or need sway replication.
+    auto drawShadowCasters = [&]() {
+        glVertexAttrib4f(6, 1.0f, 0.0f, 0.0f, 0.0f); // default xform (Player/Mushroom)
+        glEnable(GL_CULL_FACE);
+        for (unsigned int i = 0; i < mGameObjects.size(); i++)
+            mGameObjects[i]->render(pid);
+        glDisable(GL_CULL_FACE);
+        mTerrain.render(pid);
+        if (mProps)
+            mProps->render(pid);
+        for (auto &f : mFields)
+            f.render(pid);
+        mMushrooms.render(pid, mTime);
+    };
+
     glEnable(GL_DEPTH_TEST);
     glDepthMask(GL_TRUE);
     glDepthFunc(GL_LESS);
     glDisable(GL_BLEND);
     glEnable(GL_POLYGON_OFFSET_FILL);
-    glPolygonOffset(2.0f, 4.0f); // slope-scaled depth bias against acne
+
+    // Near cascade — crisp contact shadows around the player.
+    shadowFBO.bind();
+    glViewport(0, 0, mShadowRes, mShadowRes);
+    glPolygonOffset(2.0f, 4.0f);
     glClear(GL_DEPTH_BUFFER_BIT);
-
-    shadowProg.useProgram();
-    GLuint pid = shadowProg.getProgramID();
     glUniformMatrix4fv(glGetUniformLocation(pid, "uLightVP"), 1, GL_FALSE, glm::value_ptr(mLightVP));
-    glUniform3f(glGetUniformLocation(pid, "uOriginOffset"), mRenderOrigin.x, mRenderOrigin.y, mRenderOrigin.z);
-    glUniform2f(glGetUniformLocation(pid, "uWind"), 0.45f, 0.30f); // identical to the geometry pass
-    glUniform1f(glGetUniformLocation(pid, "time"), mTime);
-    glVertexAttrib4f(6, 1.0f, 0.0f, 0.0f, 0.0f); // default per-instance xform (Player/Mushroom)
+    drawShadowCasters();
 
-    // Closed OBJ casters with back-face cull, then double-sided procedural casters —
-    // same order as renderGeometryPass so model/grassWave uniform inheritance matches.
-    glEnable(GL_CULL_FACE);
-    for (unsigned int i = 0; i < mGameObjects.size(); i++)
-        mGameObjects[i]->render(pid);
-    glDisable(GL_CULL_FACE);
-    mTerrain.render(pid);
-    if (mProps)
-        mProps->render(pid);
-    for (auto &f : mFields)
-        f.render(pid);
-    mMushrooms.render(pid, mTime);
-    // Skipped casters (still RECEIVE shadows): grass/motes/seed/fireflies/birds/
-    // butterflies/beacons — animated/glowy/tiny; casting them would shimmer or need
-    // bespoke sway replication.
+    // Far cascade — distant ridge-trees, the Heart, the wider basin.
+    if (!mNoFarShadow) {
+        shadowFarFBO.bind();
+        glViewport(0, 0, mShadowResFar, mShadowResFar);
+        glPolygonOffset(2.0f, 6.0f); // wider range -> a touch more slope bias
+        glClear(GL_DEPTH_BUFFER_BIT);
+        glUniformMatrix4fv(glGetUniformLocation(pid, "uLightVP"), 1, GL_FALSE, glm::value_ptr(mLightVPFar));
+        drawShadowCasters();
+    }
 
     glDisable(GL_POLYGON_OFFSET_FILL);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -2142,6 +2171,8 @@ void Window::renderLightingPass() {
     glBindTexture(GL_TEXTURE_2D, ssaoBlurFBO.color(0));
     glActiveTexture(GL_TEXTURE6);
     glBindTexture(GL_TEXTURE_2D, shadowFBO.depth());
+    glActiveTexture(GL_TEXTURE7);
+    glBindTexture(GL_TEXTURE_2D, shadowFarFBO.depth());
 
     // eyePos in origin-relative space (matches the G-buffer positions and lights).
     glm::vec3 eyeRel = mCamera.mPosition - mRenderOrigin;
@@ -2167,6 +2198,12 @@ void Window::renderLightingPass() {
     glUniform1f(glGetUniformLocation(pid, "uShadowBias"), 0.0008f);
     glUniform1f(glGetUniformLocation(pid, "uShadowStrength"), mNoShadow ? 0.0f : mShadowStrength);
     glUniform1i(glGetUniformLocation(pid, "uShadowDebug"), mShadowDebug);
+    // Far cascade.
+    glUniformMatrix4fv(glGetUniformLocation(pid, "uLightVPFar"), 1, GL_FALSE, glm::value_ptr(mLightVPFar));
+    glUniform1f(glGetUniformLocation(pid, "uShadowTexelFar"), 1.0f / (float)mShadowResFar);
+    glUniform1f(glGetUniformLocation(pid, "uShadowTexelWorldFar"), 2.0f * mShadowRadiusFar / (float)mShadowResFar);
+    glUniform1f(glGetUniformLocation(pid, "uShadowBiasFar"), 0.0018f);
+    glUniform1i(glGetUniformLocation(pid, "uNoFarShadow"), mNoFarShadow ? 1 : 0);
 
     lightUBO.bindBase(0);
     tri.draw();
