@@ -91,6 +91,7 @@ void Window::sdlDie() {
     blurProg.deleteProgram();
     skyProg.deleteProgram();
     waterProg.deleteProgram();
+    godrayProg.deleteProgram();
     if (mWaterVao)
         glDeleteVertexArrays(1, &mWaterVao);
     glDeleteBuffers(1, &mWaterVbo);
@@ -165,6 +166,7 @@ void Window::initGL() {
     buildProgram(compositeProg, "./shaders/fullscreen.vert", "./shaders/thirdPassFrag.frag");
     buildProgram(skyProg, "./shaders/fullscreen.vert", "./shaders/sky.frag");
     buildProgram(waterProg, "./shaders/water.vert", "./shaders/water.frag");
+    buildProgram(godrayProg, "./shaders/fullscreen.vert", "./shaders/godray.frag");
 
     // Static sampler bindings.
     lightingProg.useProgram();
@@ -183,6 +185,10 @@ void Window::initGL() {
     compositeProg.useProgram();
     glUniform1i(glGetUniformLocation(compositeProg.getProgramID(), "uScene"), 0);
     glUniform1i(glGetUniformLocation(compositeProg.getProgramID(), "uBloom"), 1);
+    glUniform1i(glGetUniformLocation(compositeProg.getProgramID(), "uGodray"), 2);
+    godrayProg.useProgram();
+    glUniform1i(glGetUniformLocation(godrayProg.getProgramID(), "uHdr"), 0);
+    glUniform1i(glGetUniformLocation(godrayProg.getProgramID(), "gNormal"), 1);
     waterProg.useProgram();
     glUniform1i(glGetUniformLocation(waterProg.getProgramID(), "gPosition"), 0);
 
@@ -259,6 +265,13 @@ void Window::createFramebuffers() {
     skyFBO.setDrawBuffers();
     skyFBO.complete("skyFBO");
 
+    // Quarter-resolution god-ray buffer.
+    int gw = std::max(1, (mWidth + 3) / 4), gh = std::max(1, (mHeight + 3) / 4);
+    godrayFBO.create(gw, gh);
+    godrayFBO.addColor(GL_RGBA16F, GL_RGBA, GL_FLOAT, GL_LINEAR);
+    godrayFBO.setDrawBuffers();
+    godrayFBO.complete("godrayFBO");
+
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
@@ -268,6 +281,7 @@ void Window::destroyFramebuffers() {
     bloomA.destroy();
     bloomB.destroy();
     skyFBO.destroy();
+    godrayFBO.destroy();
     mBloomReady = false;
 }
 
@@ -866,7 +880,7 @@ void Window::renderGeometryPass() {
     glUniformMatrix4fv(glGetUniformLocation(pid, "persp"), 1, GL_FALSE, glm::value_ptr(persp));
     glUniformMatrix4fv(glGetUniformLocation(pid, "view"), 1, GL_FALSE, glm::value_ptr(mCamera.mView));
     glUniform3f(glGetUniformLocation(pid, "uOriginOffset"), mRenderOrigin.x, mRenderOrigin.y, mRenderOrigin.z);
-    glUniform2f(glGetUniformLocation(pid, "uWind"), 0.6f, 0.4f);
+    glUniform2f(glGetUniformLocation(pid, "uWind"), 0.45f, 0.30f);
     glUniform1f(glGetUniformLocation(pid, "time"), mTime);
     // Default per-instance transform for non-field geometry (scale 1, no yaw/wind).
     glVertexAttrib4f(6, 1.0f, 0.0f, 0.0f, 0.0f);
@@ -1003,6 +1017,45 @@ void Window::renderWater() {
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
+void Window::renderGodrays() {
+    godrayFBO.bind();
+    glViewport(0, 0, godrayFBO.w, godrayFBO.h);
+    glDisable(GL_DEPTH_TEST);
+    glDepthMask(GL_FALSE);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_BLEND);
+    glClearColor(0, 0, 0, 0);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    // Project the sun onto the screen and decide how strongly shafts show.
+    glm::vec4 clip = projection() * mCamera.mView * glm::vec4(mCamera.mPosition + mSky.sunDir * 1000.0f, 1.0f);
+    float strength = 0.0f;
+    glm::vec2 sunUV(0.5f);
+    if (clip.w > 0.0f) {
+        glm::vec3 ndc = glm::vec3(clip) / clip.w;
+        sunUV = glm::vec2(ndc.x * 0.5f + 0.5f, ndc.y * 0.5f + 0.5f);
+        float elev = mSky.sunDir.y;
+        float vis = glm::smoothstep(-0.05f, 0.18f, elev) * (1.0f - glm::smoothstep(0.55f, 0.88f, elev));
+        float onx = 1.0f - glm::smoothstep(0.5f, 1.3f, std::abs(ndc.x));
+        float ony = 1.0f - glm::smoothstep(0.5f, 1.3f, std::abs(ndc.y));
+        strength = vis * onx * ony * 0.7f;
+    }
+
+    if (strength > 0.001f) {
+        godrayProg.useProgram();
+        GLuint pid = godrayProg.getProgramID();
+        glUniform2f(glGetUniformLocation(pid, "uSunScreen"), sunUV.x, sunUV.y);
+        glUniform1f(glGetUniformLocation(pid, "uStrength"), strength);
+        glUniform3f(glGetUniformLocation(pid, "uSunColor"), mSky.sunDiscColor.x, mSky.sunDiscColor.y, mSky.sunDiscColor.z);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, hdrFBO.color(0));
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, gBuffer.color(1));
+        tri.draw();
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
 void Window::renderBloom() {
     if (!mBloomReady)
         return;
@@ -1055,6 +1108,9 @@ void Window::renderComposite() {
     glBindTexture(GL_TEXTURE_2D, hdrFBO.color(0));
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, (mBloomReady && mBloomTex) ? mBloomTex : mBlackTex);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, godrayFBO.color(0));
+    glUniform1f(glGetUniformLocation(pid, "uTime"), mTime);
     glUniform1f(glGetUniformLocation(pid, "uExposure"), mExposure);
     glUniform1f(glGetUniformLocation(pid, "uBloomIntensity"), (mBloomReady && mBloomTex) ? mBloomIntensity : 0.0f);
     glUniform1f(glGetUniformLocation(pid, "uVignetteMax"), mVignetteMax);
@@ -1127,6 +1183,7 @@ void Window::render() {
     renderSky();
     renderLightingPass();
     renderWater();
+    renderGodrays();
     renderBloom();
     renderComposite();
     renderHud();

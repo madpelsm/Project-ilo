@@ -6,11 +6,13 @@ out vec4 FragColor;
 
 uniform sampler2D uScene;
 uniform sampler2D uBloom;
+uniform sampler2D uGodray;
 uniform float uExposure;       // ~1.0
 uniform float uBloomIntensity; // ~0.6
 uniform float uVignetteMax;    // 0..1, strength of the darkening
 uniform float uFuel;           // 0..1, lantern warmth -> vignette radius + grade
 uniform float uFlash;          // additive white flash on firefly collection
+uniform float uTime;           // for animated film grain
 
 vec3 ACESFilm(vec3 x) {
     const float a = 2.51, b = 0.03, c = 2.43, d = 0.59, e = 0.14;
@@ -23,7 +25,15 @@ float hash21(vec2 p) {
 }
 
 void main() {
-    vec3 hdr = texture(uScene, TexCoords).rgb + texture(uBloom, TexCoords).rgb * uBloomIntensity;
+    // Subtle chromatic aberration: split the channels radially toward the edges.
+    vec2 q0 = TexCoords - 0.5;
+    vec2 ca = q0 * 0.0022 * dot(q0, q0) * 4.0;
+    vec3 scene;
+    scene.r = texture(uScene, TexCoords + ca).r;
+    scene.g = texture(uScene, TexCoords).g;
+    scene.b = texture(uScene, TexCoords - ca).b;
+    vec3 hdr = scene + texture(uBloom, TexCoords).rgb * uBloomIntensity
+               + texture(uGodray, TexCoords).rgb; // crepuscular rays
     vec3 mapped = ACESFilm(hdr * uExposure); // exposure before, clamp inside
 
     // Fuel-driven vignette: low fuel -> small bright island around the centre.
@@ -42,6 +52,12 @@ void main() {
 
     mapped += (hash21(gl_FragCoord.xy) - 0.5) / 255.0; // dither to kill banding
     vec3 outc = pow(mapped, vec3(1.0 / 2.2));           // single gamma, last
-    outc += uFlash;                                     // additive flash in display space
+
+    // Film grain (animated, luminance-scaled so highlights stay clean).
+    float g = hash21(gl_FragCoord.xy + fract(uTime) * 311.7) - 0.5;
+    float lum = dot(outc, vec3(0.299, 0.587, 0.114));
+    outc += g * 0.035 * (0.4 + 0.6 * (1.0 - lum));
+
+    outc += uFlash; // additive flash in display space
     FragColor = vec4(outc, 1.0);
 }

@@ -36,14 +36,22 @@ void main() {
     vec3 p = vertPos * instanceXform.x;
     p = vec3(cy * p.x + sy * p.z, p.y, -sy * p.x + cy * p.z);
 
-    // Wind: bend the upper part of an instance in the wind direction; tops sway more.
+    // Wind: a cantilever bend. A gust field that sweeps ALONG the wind direction makes
+    // neighbours lean together in travelling waves; the bend grows with height; the tip
+    // dips slightly to conserve length so blades arc rather than stretch.
     float stiff = instanceXform.z;
+    float ph = instanceXform.w;
+    vec2 wdir = length(uWind) > 1e-4 ? normalize(uWind) : vec2(1.0, 0.0);
+    float str = length(uWind);
     float h = max(vertPos.y, 0.0) * instanceXform.x;
-    float gust = 0.65 + 0.35 * sin(time * 0.6 + (instanceOffset.x + instanceOffset.z) * 0.04);
-    float sway = stiff * h * gust * sin(time * 1.7 + instanceXform.w +
-                                        instanceOffset.x * 0.12 + instanceOffset.z * 0.12);
-    p.x += sway * uWind.x;
-    p.z += sway * uWind.y;
+    float along = dot(instanceOffset.xz, wdir);
+    float gust = sin(along * 0.05 - time * 0.9 + ph) * 0.60 +
+                 sin(along * 0.17 - time * 1.7 + ph * 1.7) * 0.30 +
+                 sin(time * 3.1 + ph * 2.3) * 0.10;
+    float bend = stiff * str * h * (0.55 + 0.45 * gust);
+    p.x += wdir.x * bend;
+    p.z += wdir.y * bend;
+    p.y -= 0.5 * bend * bend / max(h, 0.05);
 
     vec4 worldPos = model * vec4(p + instanceOffset, 1.0);
     gl_Position = persp * view * worldPos;
