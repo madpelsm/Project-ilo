@@ -1,4 +1,5 @@
 #pragma once
+#include "Birds.h"
 #include "Camera.h"
 #include "Firefly.h"
 #include "GameObject.h"
@@ -85,6 +86,7 @@ class Window {
     glm::vec2 mGrassCenter = glm::vec2(1e9f, 1e9f);
     FireflySystem mFireflies;
     MushroomField mMushrooms;
+    Birds mBirds;
     Hud mHud;
     float mEyeOffset = 1.8f; // camera height above the ground (rises when flying)
     bool mFreeCam = false;   // disable ground-follow (aerial screenshots)

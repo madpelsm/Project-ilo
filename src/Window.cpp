@@ -72,6 +72,7 @@ void Window::sdlDie() {
     // alive, so their destructors free their own GL resources; don't touch them here.
     mFireflies.destroy();
     mMushrooms.destroy();
+    mBirds.destroy();
     for (auto &f : mFields)
         f.destroy();
     mGrass.destroy();
@@ -333,6 +334,7 @@ void Window::initAssets() {
     scatterWorld();
     mFireflies.init(60);
     mMushrooms.init(10);
+    mBirds.init(30);
 }
 
 void Window::scatterWorld() {
@@ -838,6 +840,7 @@ void Window::update() {
         mDayPhase -= std::floor(mDayPhase); // wrap to [0,1)
     }
     mSky.update(mDayPhase, mRadiance);
+    mBirds.update(mDt, mTime, mSky.nightAmount);
     for (size_t i = 0; i < mPulses.size();) {
         mPulses[i].age += mDt;
         if (mPulses[i].age >= mPulses[i].life)
@@ -948,6 +951,7 @@ void Window::renderGeometryPass() {
     glUniformMatrix4fv(glGetUniformLocation(pid, "view"), 1, GL_FALSE, glm::value_ptr(mCamera.mView));
     glUniform3f(glGetUniformLocation(pid, "uOriginOffset"), mRenderOrigin.x, mRenderOrigin.y, mRenderOrigin.z);
     glUniform2f(glGetUniformLocation(pid, "uWind"), 0.45f, 0.30f);
+    glUniform3f(glGetUniformLocation(pid, "uPlayerPos"), mCamera.mPosition.x, mCamera.mPosition.y, mCamera.mPosition.z);
     glUniform1f(glGetUniformLocation(pid, "time"), mTime);
     // Default per-instance transform for non-field geometry (scale 1, no yaw/wind).
     glVertexAttrib4f(6, 1.0f, 0.0f, 0.0f, 0.0f);
@@ -964,6 +968,7 @@ void Window::renderGeometryPass() {
     for (auto &f : mFields)
         f.render(pid);
     mGrass.render(pid);
+    mBirds.render(pid);
     mMushrooms.render(pid, mTime);
     mFireflies.render(pid, mTime);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);

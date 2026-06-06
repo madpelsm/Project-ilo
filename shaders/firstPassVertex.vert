@@ -14,6 +14,7 @@ uniform mat4 view;
 uniform mat3 normalMatrix; // transpose(inverse(mat3(model))), computed once on the CPU
 uniform vec3 uOriginOffset; // floating-origin: G-buffer stores positions relative to this
 uniform vec2 uWind;         // wind direction * strength
+uniform vec3 uPlayerPos;    // for proximity bloom: glowing things brighten as you near them
 uniform float time;
 uniform float grassWave;   // 1.0 for the forest (animate low verts), 0.0 otherwise
 
@@ -63,5 +64,8 @@ void main() {
     vNormal = normalMatrix * nrm;
     vAlbedo = inColor * instanceTintEmissive.rgb;
     vMtlProps = inMtlProps;
-    vEmissive = instanceTintEmissive.a;
+    // Proximity bloom: emissive flora flares as the Lampbearer draws near — the world
+    // lights up around you as you wander through it.
+    float prox = 1.0 - smoothstep(0.0, 11.0, distance(worldPos.xz, uPlayerPos.xz));
+    vEmissive = instanceTintEmissive.a * (1.0 + 1.6 * prox);
 }
