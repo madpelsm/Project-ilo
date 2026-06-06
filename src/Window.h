@@ -122,7 +122,7 @@ class Window {
 
     // composite tuning
     float mExposure = 1.0f;
-    float mBloomIntensity = 0.55f;
+    float mBloomIntensity = 0.68f;
     float mVignetteMax = 0.55f;
 
     Window();

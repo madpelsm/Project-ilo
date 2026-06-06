@@ -421,9 +421,9 @@ void Window::packLights() {
         heart.posRadius[1] = mHeartPos.y;
         heart.posRadius[2] = mHeartPos.z;
         heart.posRadius[3] = glm::mix(4.0f, 20.0f, p);
-        float intensity = glm::mix(0.3f, 5.0f, p);
+        float intensity = glm::mix(0.3f, 4.0f, p);
         if (mState == GameState::Won)
-            intensity = 6.0f + 1.5f * std::sin(6.2831f * 0.5f * mTime);
+            intensity = 4.5f + 1.0f * std::sin(6.2831f * 0.5f * mTime);
         heart.colorIntensity[0] = mHeartColor.x;
         heart.colorIntensity[1] = mHeartColor.y;
         heart.colorIntensity[2] = mHeartColor.z;
@@ -496,9 +496,9 @@ void Window::updateHeart() {
     mHeartP = p;
     glm::vec3 ember(1.0f, 0.25f, 0.05f), gold(1.0f, 0.85f, 0.60f);
     mHeartColor = glm::mix(ember, gold, p);
-    mHeartEmissive = glm::mix(0.15f, 6.0f, p);
+    mHeartEmissive = glm::mix(0.15f, 4.5f, p);
     if (mState == GameState::Won) // breathe when fully ablaze
-        mHeartEmissive = 7.0f + 1.0f * std::sin(6.2831f * 0.5f * mTime);
+        mHeartEmissive = 5.0f + 0.8f * std::sin(6.2831f * 0.5f * mTime);
     if (mHeart)
         mHeart->setEmissive(glm::vec4(mHeartColor, mHeartEmissive));
 }

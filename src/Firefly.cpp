@@ -8,15 +8,15 @@ const float AREA = 18.0f;        // motes roam X,Z in [-AREA, AREA]
 const float WANDER_SPEED = 0.6f;
 const float BOB_AMPLITUDE = 0.25f;
 const float BOB_FREQ = 0.8f;
-const float MOTE_SCALE = 0.08f;
+const float MOTE_SCALE = 0.10f;
 const float SPAWN_Y_MIN = 1.0f, SPAWN_Y_MAX = 3.0f;
 const float RESPAWN_DELAY = 6.0f;
 const float SKITTISH_FRACTION = 0.30f;
 const float FLEE_TRIGGER = 4.0f;
 const float FLEE_SPEED = 2.2f;
-const float FF_LIGHT_RADIUS = 4.0f;
-const float FF_LIGHT_INTENSITY = 1.5f;
-const float BASE_EMISSIVE = 2.2f; // pushed above the bloom threshold so motes glow
+const float FF_LIGHT_RADIUS = 4.5f;
+const float FF_LIGHT_INTENSITY = 1.8f;
+const float BASE_EMISSIVE = 3.0f; // pushed well above the bloom threshold so motes glow
 const float LIGHT_CULL_DIST = 16.0f;
 } // namespace
 
