@@ -1,5 +1,6 @@
 #include "Window.h"
 
+#include "Props.h"
 #include "Screenshot.h"
 #include <algorithm>
 #include <cmath>
@@ -73,6 +74,9 @@ void Window::sdlDie() {
     // alive, so their destructors free their own GL resources; don't touch them here.
     mFireflies.destroy();
     mMushrooms.destroy();
+    for (auto &f : mFields)
+        f.destroy();
+    mGrass.destroy();
     mTerrain.destroy();
     mHud.destroy();
     destroyFramebuffers();
@@ -291,8 +295,140 @@ void Window::initAssets() {
     if (mProps)
         mProps->initGL();
     mTerrain.build(896.0f, 320);
+    scatterWorld();
     mFireflies.init(60);
     mMushrooms.init(10);
+}
+
+void Window::scatterWorld() {
+    mFields.reserve(16);
+    proc::Rng rng(7777u);
+    auto slopeAt = [](float x, float z) {
+        float e = 2.0f;
+        float hl = ilo::terrainHeight(x - e, z), hr = ilo::terrainHeight(x + e, z);
+        float hd = ilo::terrainHeight(x, z - e), hu = ilo::terrainHeight(x, z + e);
+        glm::vec3 n = glm::normalize(glm::vec3(hl - hr, 2.0f * e, hd - hu));
+        return 1.0f - n.y;
+    };
+
+    // Dense grass that follows the camera: a disc-shaped pattern recentred each time
+    // the player crosses a cell, so the meadow is always lush underfoot.
+    {
+        const int GRASS = 14000;
+        const float R = 72.0f;
+        proc::Mesh tuft = proc::makeGrassTuft(rng);
+        mGrassBase.clear();
+        mGrassBase.reserve(GRASS);
+        for (int i = 0; i < GRASS; i++) {
+            float ang = rng.range(0, 6.2831853f);
+            float rad = R * std::sqrt(rng.f()); // uniform over the disc
+            FieldInstance fi;
+            fi.pos = glm::vec3(std::cos(ang) * rad, 0.0f, std::sin(ang) * rad); // offset only
+            fi.tintEmissive = glm::vec4(rng.range(0.8f, 1.1f), rng.range(0.9f, 1.2f), rng.range(0.8f, 1.1f), 0.0f);
+            fi.xform = glm::vec4(rng.range(0.7f, 1.6f), rng.range(0, 6.2831853f), 0.9f, rng.range(0, 6.2831853f));
+            mGrassBase.push_back(fi);
+        }
+        mGrass.buildDynamic(tuft, GRASS);
+        updateGrass(true);
+    }
+
+    // Conifers on the slopes (two baked variants, gentle sway).
+    for (int v = 0; v < 2; v++) {
+        proc::Rng tr(100u + v);
+        proc::Mesh tree;
+        proc::tree(tree, glm::vec3(0), tr);
+        std::vector<FieldInstance> inst;
+        for (int i = 0; i < 2000 && (int)inst.size() < 450; i++) {
+            float x = rng.range(-720, 720), z = rng.range(-720, 720);
+            float r = std::sqrt(x * x + z * z), h = ilo::terrainHeight(x, z);
+            if (h < 1.0f || r < 120.0f || r > 740.0f || slopeAt(x, z) > 0.5f)
+                continue;
+            FieldInstance fi;
+            fi.pos = glm::vec3(x, h, z);
+            fi.tintEmissive = glm::vec4(rng.range(0.8f, 1.15f), rng.range(0.85f, 1.1f), rng.range(0.8f, 1.1f), 0.0f);
+            fi.xform = glm::vec4(rng.range(0.7f, 1.5f), rng.range(0, 6.2831853f), 0.16f, rng.range(0, 6.2831853f));
+            inst.push_back(fi);
+        }
+        mFields.emplace_back();
+        mFields.back().build(tree, inst);
+    }
+
+    // Glowing wildflowers in the meadows (emissive, sway).
+    {
+        proc::Mesh flower = proc::makeFlower(rng);
+        glm::vec3 pal[4] = {{1.0f, 0.85f, 0.45f}, {1.0f, 0.55f, 0.75f}, {0.5f, 0.8f, 1.0f}, {0.8f, 0.55f, 1.0f}};
+        std::vector<FieldInstance> inst;
+        for (int i = 0; i < 8000 && (int)inst.size() < 2200; i++) {
+            float x = rng.range(-450, 450), z = rng.range(-450, 450);
+            float h = ilo::terrainHeight(x, z);
+            if (h < 0.8f || std::sqrt(x * x + z * z) > 460.0f || slopeAt(x, z) > 0.4f)
+                continue;
+            FieldInstance fi;
+            fi.pos = glm::vec3(x, h, z);
+            glm::vec3 c = pal[(int)(rng.f() * 3.999f) & 3];
+            fi.tintEmissive = glm::vec4(c, rng.range(1.2f, 2.4f));
+            fi.xform = glm::vec4(rng.range(0.8f, 1.7f), rng.range(0, 6.2831853f), 0.5f, rng.range(0, 6.2831853f));
+            inst.push_back(fi);
+        }
+        mFields.emplace_back();
+        mFields.back().build(flower, inst);
+    }
+
+    // Boulders strewn over the land (no wind).
+    {
+        proc::Rng rr(55u);
+        proc::Mesh boulder;
+        proc::rock(boulder, glm::vec3(0), 0.5f, rr, glm::vec3(0.12f, 0.12f, 0.13f));
+        std::vector<FieldInstance> inst;
+        for (int i = 0; i < 1600 && (int)inst.size() < 320; i++) {
+            float x = rng.range(-760, 760), z = rng.range(-760, 760);
+            float r = std::sqrt(x * x + z * z), h = ilo::terrainHeight(x, z);
+            if (r < 60.0f)
+                continue;
+            FieldInstance fi;
+            fi.pos = glm::vec3(x, h - 0.1f, z);
+            float g = rng.range(0.7f, 1.2f);
+            fi.tintEmissive = glm::vec4(g, g, g * 1.05f, 0.0f);
+            fi.xform = glm::vec4(rng.range(0.6f, 2.4f), rng.range(0, 6.2831853f), 0.0f, 0.0f);
+            inst.push_back(fi);
+        }
+        mFields.emplace_back();
+        mFields.back().build(boulder, inst);
+    }
+}
+
+void Window::updateGrass(bool force) {
+    if (mGrassBase.empty())
+        return;
+    glm::vec2 cam(mCamera.mPosition.x, mCamera.mPosition.z);
+    glm::vec2 cell = glm::floor(cam / 8.0f) * 8.0f; // snap to an 8m grid
+    if (!force && cell == mGrassCenter)
+        return;
+    mGrassCenter = cell;
+
+    const float R = 72.0f, e = 2.0f;
+    std::vector<FieldInstance> inst;
+    inst.reserve(mGrassBase.size());
+    for (const FieldInstance &b : mGrassBase) {
+        float wx = cell.x + b.pos.x, wz = cell.y + b.pos.z;
+        float h = ilo::terrainHeight(wx, wz);
+        if (h < 0.4f)
+            continue; // keep grass out of the lake
+        float d = std::sqrt(b.pos.x * b.pos.x + b.pos.z * b.pos.z);
+        float fade = 1.0f - std::max(0.0f, (d - R * 0.6f) / (R * 0.4f)); // soft disc edge
+        if (fade <= 0.02f)
+            continue;
+        float hl = ilo::terrainHeight(wx - e, wz), hr = ilo::terrainHeight(wx + e, wz);
+        float hd = ilo::terrainHeight(wx, wz - e), hu = ilo::terrainHeight(wx, wz + e);
+        float ny = (2 * e) / std::sqrt((hl - hr) * (hl - hr) + (2 * e) * (2 * e) + (hd - hu) * (hd - hu));
+        if ((1.0f - ny) > 0.5f)
+            continue; // too steep
+        FieldInstance fi = b;
+        fi.pos = glm::vec3(wx, h, wz);
+        fi.xform.x = b.xform.x * fade;
+        inst.push_back(fi);
+    }
+    mGrass.update(inst);
 }
 
 void Window::stepFrameWeb() {
@@ -561,6 +697,8 @@ void Window::update() {
     mRenderOrigin = glm::vec3(std::round(mCamera.mPosition.x / 128.0f) * 128.0f, 0.0f,
                               std::round(mCamera.mPosition.z / 128.0f) * 128.0f);
 
+    updateGrass(false); // recentre the dense grass disc when the player crosses a cell
+
     if (mState == GameState::Intro) {
         mIntroTimer -= mDt;
         if (mIntroTimer <= 0.0f)
@@ -728,7 +866,10 @@ void Window::renderGeometryPass() {
     glUniformMatrix4fv(glGetUniformLocation(pid, "persp"), 1, GL_FALSE, glm::value_ptr(persp));
     glUniformMatrix4fv(glGetUniformLocation(pid, "view"), 1, GL_FALSE, glm::value_ptr(mCamera.mView));
     glUniform3f(glGetUniformLocation(pid, "uOriginOffset"), mRenderOrigin.x, mRenderOrigin.y, mRenderOrigin.z);
+    glUniform2f(glGetUniformLocation(pid, "uWind"), 0.6f, 0.4f);
     glUniform1f(glGetUniformLocation(pid, "time"), mTime);
+    // Default per-instance transform for non-field geometry (scale 1, no yaw/wind).
+    glVertexAttrib4f(6, 1.0f, 0.0f, 0.0f, 0.0f);
 
     // Closed OBJ meshes (forest, deer, Heart) render with back-face culling.
     for (unsigned int i = 0; i < mGameObjects.size(); i++) {
@@ -739,6 +880,9 @@ void Window::renderGeometryPass() {
     mTerrain.render(pid);
     if (mProps)
         mProps->render(pid);
+    for (auto &f : mFields)
+        f.render(pid);
+    mGrass.render(pid);
     mMushrooms.render(pid, mTime);
     mFireflies.render(pid, mTime);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);

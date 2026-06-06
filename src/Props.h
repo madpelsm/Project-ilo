@@ -125,6 +125,45 @@ inline Mesh makeGroveProps(unsigned int seed, int treeCount, int rockCount, floa
     return m;
 }
 
+// A tuft of grass blades (base at origin). White-ish so per-instance tint colours it;
+// high wind stiffness when scattered makes a whole meadow ripple.
+inline Mesh makeGrassTuft(Rng &rng) {
+    Mesh m;
+    glm::vec3 mtl(6, 0.04f, 0);
+    int blades = 6;
+    for (int i = 0; i < blades; i++) {
+        float a = rng.range(0, 6.2831853f);
+        float bx = std::cos(a) * 0.05f, bz = std::sin(a) * 0.05f;
+        float lean = rng.range(0.04f, 0.16f), la = rng.range(0, 6.2831853f);
+        float hgt = rng.range(0.32f, 0.7f);
+        glm::vec3 col(rng.range(0.55f, 0.85f), rng.range(0.85f, 1.05f), rng.range(0.45f, 0.75f));
+        glm::vec3 b0(bx - 0.03f, 0, bz), b1(bx + 0.03f, 0, bz);
+        glm::vec3 tip(bx + std::cos(la) * lean, hgt, bz + std::sin(la) * lean);
+        tri(m, b0, b1, tip, col, mtl);
+    }
+    return m;
+}
+
+// A wildflower (base at origin): dim stem, white petals (tinted per-instance) and a
+// bright centre. Scatter with a per-instance emissive to make glowing blooms.
+inline Mesh makeFlower(Rng &rng) {
+    Mesh m;
+    glm::vec3 mtl(8, 0.1f, 0);
+    cylinder(m, glm::vec3(0, 0, 0), 0.012f, 0.008f, 0.30f, 4, glm::vec3(0.12f, 0.30f, 0.12f), mtl);
+    float cy = 0.30f;
+    int petals = 5;
+    for (int i = 0; i < petals; i++) {
+        float a = 6.2831853f * i / petals;
+        glm::vec3 c(0, cy, 0);
+        glm::vec3 p0 = c + glm::vec3(std::cos(a) * 0.02f, 0, std::sin(a) * 0.02f);
+        glm::vec3 p1 = c + glm::vec3(std::cos(a + 1.2f) * 0.02f, 0, std::sin(a + 1.2f) * 0.02f);
+        glm::vec3 tip = c + glm::vec3(std::cos(a + 0.6f) * 0.10f, 0.025f, std::sin(a + 0.6f) * 0.10f);
+        tri(m, p0, tip, p1, glm::vec3(1.0f), mtl); // white -> per-instance tint colours it
+    }
+    cone(m, glm::vec3(0, cy, 0), 0.028f, 0.035f, 6, glm::vec3(1.0f, 0.95f, 0.7f), mtl); // glowing heart
+    return m;
+}
+
 // A single mushroom unit (base at origin): dim stem + bright cap. The cap colour
 // is multiplied per-instance and the glow comes from the instance's emissive.
 inline Mesh makeMushroom() {

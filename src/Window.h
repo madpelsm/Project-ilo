@@ -3,6 +3,7 @@
 #include "Firefly.h"
 #include "GameObject.h"
 #include "Hud.h"
+#include "InstancedField.h"
 #include "Mushroom.h"
 #include "Player.h"
 #include "Render.h"
@@ -76,6 +77,10 @@ class Window {
     Player *mHeart = nullptr;
     Player *mProps = nullptr; // procedural trees + rocks (double-sided)
     ilo::Terrain mTerrain;
+    std::vector<InstancedField> mFields; // scattered living vegetation (trees/flowers/rocks)
+    InstancedField mGrass;               // dense grass that follows the camera
+    std::vector<FieldInstance> mGrassBase; // disc-offset pattern (recentred on the camera)
+    glm::vec2 mGrassCenter = glm::vec2(1e9f, 1e9f);
     FireflySystem mFireflies;
     MushroomField mMushrooms;
     Hud mHud;
@@ -169,6 +174,8 @@ class Window {
     void createFramebuffers();
     void destroyFramebuffers();
     void loadGeometries();
+    void scatterWorld();
+    void updateGrass(bool force);
     void packLights();
     void updateHeart();
     void updateDeer();

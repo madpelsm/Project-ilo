@@ -30,10 +30,7 @@ int main(int argc, char *argv[]) {
     w.addNPC(*forest);
     w.mForest = forest;
 
-    // Procedural trees + rocks (all coded) scattered across the bowl, sat on the land.
-    Player *props = new Player();
-    props->setGeometry(proc::makeGroveProps(20260606u, 220, 120, 130.0f, 760.0f, ilo::terrainHeight));
-    w.mProps = props;
+    // (Trees, grass, flowers and rocks are scattered as instanced fields by the engine.)
 
     // The Heart of the Grove: a glowing idol floating above the centre of the Mere.
     Player *heart = new Player("./shapes/suzanne.obj");
@@ -61,7 +58,6 @@ int main(int argc, char *argv[]) {
     w.run();
 
     delete forest;
-    delete props;
     delete heart;
     delete deer1;
     delete deer2;
