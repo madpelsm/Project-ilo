@@ -29,6 +29,7 @@ uniform float uFogHeightFalloff;
 uniform float uFogBaseY;
 
 uniform sampler2D uSkyTex;  // half-res procedural sky (background + atmosphere)
+uniform sampler2D uAO;      // screen-space ambient occlusion (1 open .. 0 occluded)
 uniform vec3 uSunDir;       // toward the sun
 uniform vec3 uSunlight;     // directional radiance (colour * intensity), ~0 at night
 uniform vec3 uRimColor;     // sky-tinted rim light on silhouette edges
@@ -59,7 +60,11 @@ void main() {
     float ambient = m.z;
 
     vec3 V = normalize(eyePos - P);
-    vec3 lit = (ambient + uAmbient) * albedo;
+    // Ambient occlusion only darkens the indirect/fill terms (ambient + sky rim), never
+    // the direct sun or point lights — so creases and contact points read as shadowed
+    // without dimming surfaces a real light actually reaches.
+    float ao = texture(uAO, TexCoords).r;
+    vec3 lit = (ambient + uAmbient) * albedo * ao;
 
     // Directional sunlight (no shadows): soft-wrap so shadowed sides never go pure
     // black. ~0 at night, so the cosy point-light glow still owns the dark.
@@ -94,7 +99,7 @@ void main() {
     // Rim / sky light: a fresnel sheen on silhouette edges, tinted by the sky and lifted
     // by how skyward the surface faces — gives the low-poly forms a soft glowing edge.
     float rim = pow(1.0 - max(dot(N, V), 0.0), 3.0) * (0.4 + 0.6 * max(N.y, 0.0));
-    lit += rim * uRimColor * albedo;
+    lit += rim * uRimColor * albedo * ao;
 
     lit = applyFog(lit, P);
     lit += albedo * emissive; // emissive after fog so glowing sources punch through

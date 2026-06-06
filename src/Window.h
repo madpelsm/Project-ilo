@@ -63,12 +63,15 @@ class Window {
 
     // shader programs (HUD owns its own program)
     ShaderProgram geometryProg, lightingProg, brightProg, blurProg, compositeProg, skyProg, waterProg, godrayProg, particleProg;
+    ShaderProgram ssaoProg, ssaoBlurProg;
+    std::vector<glm::vec3> mSsaoKernel; // hemisphere offsets, uploaded once
+    std::vector<glm::vec3> mSsaoNoise;  // 4x4 rotation tile, uploaded once
     GLuint mWaterVao = 0, mWaterVbo = 0;
     GLuint mParticleVao = 0, mParticleVbo = 0;
     int mParticleCount = 0;
 
     // render targets + helpers
-    ilo::Framebuffer gBuffer, hdrFBO, bloomA, bloomB, skyFBO, godrayFBO;
+    ilo::Framebuffer gBuffer, hdrFBO, bloomA, bloomB, skyFBO, godrayFBO, ssaoFBO, ssaoBlurFBO;
     ilo::ScreenTri tri;
     ilo::LightUBO lightUBO;
     GLuint mBlackTex = 0;
@@ -185,6 +188,7 @@ class Window {
     void render();
     void renderSky();
     void renderGeometryPass();
+    void renderSSAO();
     void renderLightingPass();
     void renderWater();
     void renderGodrays();

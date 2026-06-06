@@ -173,6 +173,8 @@ void Window::initGL() {
     buildProgram(waterProg, "./shaders/water.vert", "./shaders/water.frag");
     buildProgram(godrayProg, "./shaders/fullscreen.vert", "./shaders/godray.frag");
     buildProgram(particleProg, "./shaders/particles.vert", "./shaders/particles.frag");
+    buildProgram(ssaoProg, "./shaders/fullscreen.vert", "./shaders/ssao.frag");
+    buildProgram(ssaoBlurProg, "./shaders/fullscreen.vert", "./shaders/ssaoBlur.frag");
 
     // Static sampler bindings.
     lightingProg.useProgram();
@@ -182,7 +184,38 @@ void Window::initGL() {
     glUniform1i(glGetUniformLocation(lp, "gAlbedo"), 2);
     glUniform1i(glGetUniformLocation(lp, "gMtlProps"), 3);
     glUniform1i(glGetUniformLocation(lp, "uSkyTex"), 4);
+    glUniform1i(glGetUniformLocation(lp, "uAO"), 5);
     glUniformBlockBinding(lp, glGetUniformBlockIndex(lp, "LightBlock"), 0);
+
+    // SSAO: hemisphere kernel (clustered toward the surface) + a 4x4 rotation tile,
+    // generated once and held in the program as constant uniform arrays.
+    {
+        unsigned int s = 0xA0A0BEEFu;
+        auto rnd = [&]() { s ^= s << 13; s ^= s >> 17; s ^= s << 5; return (s & 0xFFFFFF) / (float)0x1000000; };
+        mSsaoKernel.clear();
+        for (int i = 0; i < 16; i++) {
+            glm::vec3 v(rnd() * 2.0f - 1.0f, rnd() * 2.0f - 1.0f, rnd()); // hemisphere +z
+            v = glm::normalize(v) * rnd();
+            float t = i / 16.0f;
+            v *= (0.1f + 0.9f * t * t); // pack more samples near the origin
+            mSsaoKernel.push_back(v);
+        }
+        mSsaoNoise.clear();
+        for (int i = 0; i < 16; i++)
+            mSsaoNoise.push_back(glm::vec3(rnd() * 2.0f - 1.0f, rnd() * 2.0f - 1.0f, 0.0f));
+
+        ssaoProg.useProgram();
+        GLuint sp = ssaoProg.getProgramID();
+        glUniform1i(glGetUniformLocation(sp, "gPosition"), 0);
+        glUniform1i(glGetUniformLocation(sp, "gNormal"), 1);
+        glUniform3fv(glGetUniformLocation(sp, "uKernel"), 16, &mSsaoKernel[0].x);
+        glUniform3fv(glGetUniformLocation(sp, "uNoise"), 16, &mSsaoNoise[0].x);
+        glUniform1f(glGetUniformLocation(sp, "uRadius"), 1.4f);
+        glUniform1f(glGetUniformLocation(sp, "uBias"), 0.04f);
+        glUniform1f(glGetUniformLocation(sp, "uPower"), 1.7f);
+        ssaoBlurProg.useProgram();
+        glUniform1i(glGetUniformLocation(ssaoBlurProg.getProgramID(), "uAO"), 0);
+    }
 
     brightProg.useProgram();
     glUniform1i(glGetUniformLocation(brightProg.getProgramID(), "uScene"), 0);
@@ -296,6 +329,17 @@ void Window::createFramebuffers() {
     godrayFBO.setDrawBuffers();
     godrayFBO.complete("godrayFBO");
 
+    // Half-resolution ambient-occlusion buffers (single channel, smoothed by a blur).
+    int aw = std::max(1, (mWidth + 1) / 2), ah = std::max(1, (mHeight + 1) / 2);
+    ssaoFBO.create(aw, ah);
+    ssaoFBO.addColor(GL_R8, GL_RED, GL_UNSIGNED_BYTE, GL_LINEAR);
+    ssaoFBO.setDrawBuffers();
+    ssaoFBO.complete("ssaoFBO");
+    ssaoBlurFBO.create(aw, ah);
+    ssaoBlurFBO.addColor(GL_R8, GL_RED, GL_UNSIGNED_BYTE, GL_LINEAR);
+    ssaoBlurFBO.setDrawBuffers();
+    ssaoBlurFBO.complete("ssaoBlurFBO");
+
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
@@ -306,6 +350,8 @@ void Window::destroyFramebuffers() {
     bloomB.destroy();
     skyFBO.destroy();
     godrayFBO.destroy();
+    ssaoFBO.destroy();
+    ssaoBlurFBO.destroy();
     mBloomReady = false;
 }
 
@@ -1078,6 +1124,39 @@ void Window::renderGeometryPass() {
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
+void Window::renderSSAO() {
+    // Occlusion pass: gather a hemisphere from the G-buffer into the half-res buffer.
+    ssaoFBO.bind();
+    glViewport(0, 0, ssaoFBO.w, ssaoFBO.h);
+    glDisable(GL_DEPTH_TEST);
+    glDepthMask(GL_FALSE);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_BLEND);
+
+    ssaoProg.useProgram();
+    GLuint pid = ssaoProg.getProgramID();
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, gBuffer.color(0));
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, gBuffer.color(1));
+    glm::vec3 eyeRel = mCamera.mPosition - mRenderOrigin;
+    glUniform3f(glGetUniformLocation(pid, "eyePos"), eyeRel.x, eyeRel.y, eyeRel.z);
+    // origin-relative world -> clip: proj * view * translate(origin).
+    glm::mat4 vpRel = projection() * mCamera.mView * glm::translate(glm::mat4(1.0f), mRenderOrigin);
+    glUniformMatrix4fv(glGetUniformLocation(pid, "uViewProjRel"), 1, GL_FALSE, glm::value_ptr(vpRel));
+    tri.draw();
+
+    // Blur pass: average the 4x4 noise dither out of the raw AO.
+    ssaoBlurFBO.bind();
+    glViewport(0, 0, ssaoBlurFBO.w, ssaoBlurFBO.h);
+    ssaoBlurProg.useProgram();
+    glUniform2f(glGetUniformLocation(ssaoBlurProg.getProgramID(), "uTexel"), 1.0f / ssaoFBO.w, 1.0f / ssaoFBO.h);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, ssaoFBO.color(0));
+    tri.draw();
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
 void Window::renderSky() {
     glViewport(0, 0, skyFBO.w, skyFBO.h);
     skyFBO.bind();
@@ -1134,6 +1213,8 @@ void Window::renderLightingPass() {
     glBindTexture(GL_TEXTURE_2D, gBuffer.color(3));
     glActiveTexture(GL_TEXTURE4);
     glBindTexture(GL_TEXTURE_2D, skyFBO.color(0));
+    glActiveTexture(GL_TEXTURE5);
+    glBindTexture(GL_TEXTURE_2D, ssaoBlurFBO.color(0));
 
     // eyePos in origin-relative space (matches the G-buffer positions and lights).
     glm::vec3 eyeRel = mCamera.mPosition - mRenderOrigin;
@@ -1398,6 +1479,7 @@ void Window::renderHud() {
 
 void Window::render() {
     renderGeometryPass();
+    renderSSAO();
     renderSky();
     renderLightingPass();
     renderWater();
