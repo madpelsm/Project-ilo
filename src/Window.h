@@ -86,6 +86,25 @@ class Window {
     float mHeartEmissive = 0.15f;
     float mHeartP = 0.0f;
 
+    // Juice
+    struct Pulse {
+        glm::vec3 pos;
+        glm::vec3 color;
+        float age;
+        float life;
+    };
+    std::vector<Pulse> mPulses;
+    float mFlash = 0.0f;         // brief white screen flash on collect
+    float mFlareTimer = 0.0f;    // lantern flare remaining
+    float mFlareCooldown = 0.0f; // time until the next flare is allowed
+    bool mMoving = false;
+
+    struct DeerAgent {
+        Player *p = nullptr;
+        float x = 0, z = 0, tx = 0, tz = 0, yaw = 0, pause = 0;
+    };
+    std::vector<DeerAgent> mDeer;
+
     // sky / fog / ambient
     glm::vec3 mAmbient = glm::vec3(0.012f, 0.016f, 0.028f);
     glm::vec3 mFogColor = glm::vec3(0.02f, 0.035f, 0.06f);
@@ -123,7 +142,9 @@ class Window {
     void loadGeometries();
     void packLights();
     void updateHeart();
+    void updateDeer();
     void resetGame();
+    void addDeer(Player &deer, float x, float z);
 
     void setvSync(bool vSyncStatus);
     void setMouseSensitivity(float _sensitivity);

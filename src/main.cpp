@@ -38,23 +38,27 @@ int main(int argc, char *argv[]) {
     w.addNPC(*heart);
     w.mHeart = heart;
 
-    // A couple of deer quietly inhabiting the grove.
+    // A few deer quietly wandering the grove.
     Player *deer1 = new Player("./shapes/Deer1.obj");
     deer1->setScale(glm::vec3(0.8f, 0.8f, 0.8f));
-    deer1->setTransform(-3.0f, 0.0f, -4.0f, 0.6f);
-    w.addNPC(*deer1);
+    w.addDeer(*deer1, -6.0f, -4.0f);
 
     Player *deer2 = new Player("./shapes/Deer1.obj");
     deer2->setScale(glm::vec3(0.8f, 0.8f, 0.8f));
-    deer2->setTransform(5.0f, 0.0f, -9.0f, -1.2f);
-    w.addNPC(*deer2);
+    w.addDeer(*deer2, 7.0f, -9.0f);
+
+    Player *deer3 = new Player("./shapes/Deer1.obj");
+    deer3->setScale(glm::vec3(0.8f, 0.8f, 0.8f));
+    w.addDeer(*deer3, 2.0f, 8.0f);
 
     w.loadGeometries();
     w.initAssets();
     w.run();
 
     delete forest;
+    delete heart;
     delete deer1;
     delete deer2;
+    delete deer3;
     return 0;
 }

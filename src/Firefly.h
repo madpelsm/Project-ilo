@@ -8,6 +8,12 @@
 #include <glm/glm.hpp>
 #include <vector>
 
+struct CollectEvent {
+    glm::vec3 pos;
+    glm::vec3 color;
+    bool skittish;
+};
+
 struct Firefly {
     float x = 0, z = 0, baseY = 0; // wander position (render y adds a bob)
     glm::vec2 vel = glm::vec2(0);  // horizontal wander velocity
@@ -30,7 +36,8 @@ class FireflySystem {
     void destroy();
     // Advance the simulation; returns the number of fireflies collected this frame
     // (a mote within collectRadius of camPos). collectedFuel sums their fuel reward.
-    int update(float dt, float time, const glm::vec3 &camPos, float collectRadius, float &collectedFuel);
+    int update(float dt, float time, const glm::vec3 &camPos, float collectRadius, float &collectedFuel,
+               std::vector<CollectEvent> *events = nullptr);
     // Push per-mote point lights for the active fireflies nearest the camera.
     void appendLights(std::vector<ilo::OmniLightGPU> &lights, float time, const glm::vec3 &camPos, int maxFireflyLights);
     // Draw the motes (call inside the geometry pass, after opaque meshes).

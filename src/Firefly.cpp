@@ -143,7 +143,8 @@ void FireflySystem::destroy() {
     mVao = mVbo = mIbo = mInstVbo = mTintVbo = 0;
 }
 
-int FireflySystem::update(float dt, float time, const glm::vec3 &camPos, float collectRadius, float &collectedFuel) {
+int FireflySystem::update(float dt, float time, const glm::vec3 &camPos, float collectRadius, float &collectedFuel,
+                          std::vector<CollectEvent> *events) {
     int collected = 0;
     collectedFuel = 0.0f;
     float cr2 = collectRadius * collectRadius;
@@ -167,6 +168,8 @@ int FireflySystem::update(float dt, float time, const glm::vec3 &camPos, float c
             f.respawnTimer = RESPAWN_DELAY;
             collected++;
             collectedFuel += f.skittish ? 27.0f : 18.0f;
+            if (events)
+                events->push_back({glm::vec3(f.x, f.baseY + bob(f, time), f.z), f.color, f.skittish});
             continue;
         }
 

@@ -21,6 +21,11 @@ const float FUEL_MAX = 100.0f;
 const float FUEL_START = 70.0f;
 const float FUEL_DRAIN = 2.5f;
 const float SPRINT_DRAIN_EXTRA = 1.5f;
+const float FLARE_COST = 8.0f;
+const float FLARE_DURATION = 1.0f;
+const float FLARE_COOLDOWN = 1.5f;
+const float FLARE_MULT = 2.0f;
+const float DEER_SPEED = 1.0f;
 
 void buildProgram(ShaderProgram &prog, const char *vsPath, const char *fsPath) {
     Shader vs, fs;
@@ -273,6 +278,7 @@ void Window::checkEvents() {
     bool sprint = state[SDL_SCANCODE_LSHIFT] || state[SDL_SCANCODE_RSHIFT];
     bool moving = state[SDL_SCANCODE_W] || state[SDL_SCANCODE_S] || state[SDL_SCANCODE_A] || state[SDL_SCANCODE_D];
     mSprinting = canMove && sprint && moving;
+    mMoving = canMove && moving;
     float speed = (sprint ? SPRINT_SPEED : WALK_SPEED) * mDt;
     if (canMove) {
         if (state[SDL_SCANCODE_W])
@@ -293,6 +299,15 @@ void Window::checkEvents() {
         switch (event.type) {
         case SDL_MOUSEMOTION:
             mCamera.rotate(-mMouseSensitivity * event.motion.xrel, -mMouseSensitivity * event.motion.yrel);
+            break;
+        case SDL_MOUSEBUTTONDOWN:
+            if (event.button.button == SDL_BUTTON_LEFT && mState == GameState::Playing &&
+                mFlareCooldown <= 0.0f && mFuelW >= FLARE_COST) {
+                mFuelW -= FLARE_COST;
+                mFlareTimer = FLARE_DURATION;
+                mFlareCooldown = FLARE_COOLDOWN;
+                mFlash = std::min(0.25f, mFlash + 0.1f);
+            }
             break;
         case SDL_WINDOWEVENT:
             if (event.window.event == SDL_WINDOWEVENT_SIZE_CHANGED)
@@ -345,19 +360,50 @@ void Window::packLights() {
     mLights.clear();
     // Lantern is always lights[0], bound to the camera.
     glm::vec3 lp = mCamera.mPosition;
+    if (mMoving) // subtle head-bob while walking
+        lp.y += 0.05f * std::sin(6.2831f * 2.0f * mTime);
     float f = mFuel;
+    float radius = 3.0f + 9.0f * f;
+    float li = 0.6f + 2.4f * f;
+    // Flare: a short, fading burst that doubles the lantern's reach.
+    if (mFlareTimer > 0.0f) {
+        float fr = mFlareTimer / FLARE_DURATION;
+        float mult = 1.0f + (FLARE_MULT - 1.0f) * fr;
+        radius *= mult;
+        li *= mult;
+    }
+    // Low-warmth stutter: the dying lantern flickers and briefly cuts out.
+    if (f < 0.20f) {
+        float flicker = 1.0f + 0.15f * std::sin(6.2831f * 8.0f * mTime);
+        float dropout = (std::fmod(mTime, 2.0f) < 0.1f) ? 0.3f : 1.0f;
+        li *= flicker * dropout;
+    }
     ilo::OmniLightGPU lantern;
     lantern.posRadius[0] = lp.x;
     lantern.posRadius[1] = lp.y;
     lantern.posRadius[2] = lp.z;
-    lantern.posRadius[3] = 3.0f + 9.0f * f;
+    lantern.posRadius[3] = radius;
     glm::vec3 lc(1.00f, 0.72f, 0.42f);
-    float li = 0.6f + 2.4f * f;
     lantern.colorIntensity[0] = lc.x;
     lantern.colorIntensity[1] = lc.y;
     lantern.colorIntensity[2] = lc.z;
     lantern.colorIntensity[3] = li;
     mLights.push_back(lantern);
+
+    // Collection pulses: a bright expanding flash where each firefly was caught.
+    for (const Pulse &p : mPulses) {
+        float t = p.age / p.life; // 0..1
+        ilo::OmniLightGPU pl;
+        pl.posRadius[0] = p.pos.x;
+        pl.posRadius[1] = p.pos.y;
+        pl.posRadius[2] = p.pos.z;
+        pl.posRadius[3] = 1.0f + 4.0f * t;
+        pl.colorIntensity[0] = p.color.x;
+        pl.colorIntensity[1] = p.color.y;
+        pl.colorIntensity[2] = p.color.z;
+        pl.colorIntensity[3] = (1.0f - t) * 8.0f;
+        mLights.push_back(pl);
+    }
 
     // Heart of the Grove: a dedicated light that brightens as the player progresses.
     {
@@ -393,9 +439,15 @@ void Window::update() {
 
     if (mState == GameState::Playing) {
         float fuelGained = 0.0f;
-        int got = mFireflies.update(mDt, mTime, mCamera.mPosition, COLLECT_RADIUS, fuelGained);
+        std::vector<CollectEvent> events;
+        int got = mFireflies.update(mDt, mTime, mCamera.mPosition, COLLECT_RADIUS, fuelGained, &events);
         mCollected += got;
         mFuelW = std::min(FUEL_MAX, mFuelW + fuelGained);
+        for (const CollectEvent &e : events) {
+            if (mPulses.size() < 8)
+                mPulses.push_back({e.pos, e.color, 0.0f, 0.35f});
+            mFlash = std::min(0.25f, mFlash + 0.15f);
+        }
         if (!mFreezeFuel) {
             float drain = FUEL_DRAIN + (mSprinting ? SPRINT_DRAIN_EXTRA : 0.0f);
             mFuelW -= drain * mDt;
@@ -408,8 +460,23 @@ void Window::update() {
             mState = GameState::Won;
     }
 
+    // advance feedback timers
+    mFlash = std::max(0.0f, mFlash - mDt * 1.5f);
+    if (mFlareTimer > 0.0f)
+        mFlareTimer -= mDt;
+    if (mFlareCooldown > 0.0f)
+        mFlareCooldown -= mDt;
+    for (size_t i = 0; i < mPulses.size();) {
+        mPulses[i].age += mDt;
+        if (mPulses[i].age >= mPulses[i].life)
+            mPulses.erase(mPulses.begin() + i);
+        else
+            ++i;
+    }
+
     mFuel = mFuelW / FUEL_MAX;
     updateHeart();
+    updateDeer();
     packLights();
     for (unsigned int i = 0; i < mGameObjects.size(); i++) {
         mGameObjects[i]->update();
@@ -426,6 +493,50 @@ void Window::updateHeart() {
         mHeartEmissive = 7.0f + 1.0f * std::sin(6.2831f * 0.5f * mTime);
     if (mHeart)
         mHeart->setEmissive(glm::vec4(mHeartColor, mHeartEmissive));
+}
+
+void Window::addDeer(Player &deer, float x, float z) {
+    addNPC(deer);
+    DeerAgent d;
+    d.p = &deer;
+    d.x = x;
+    d.z = z;
+    d.tx = x;
+    d.tz = z;
+    d.pause = 1.0f + 3.0f * ((x * 13.0f + z * 7.0f) - std::floor(x * 13.0f + z * 7.0f));
+    mDeer.push_back(d);
+    deer.setTransform(x, 0.0f, z, 0.0f);
+}
+
+void Window::updateDeer() {
+    if (mState != GameState::Playing && mState != GameState::Intro)
+        return;
+    for (DeerAgent &d : mDeer) {
+        float dx = d.tx - d.x, dz = d.tz - d.z;
+        float dist = std::sqrt(dx * dx + dz * dz);
+        if (dist < 0.2f) {
+            d.pause -= mDt;
+            if (d.pause <= 0.0f) {
+                // pick a new wander target within the grove
+                float a = std::sin(mTime * 1.3f + d.x * 2.1f + d.z) * 43758.5453f;
+                a = a - std::floor(a);
+                float b = std::sin(mTime * 0.7f + d.z * 1.7f) * 12543.1234f;
+                b = b - std::floor(b);
+                float ang = a * 6.2831f;
+                float rad = 4.0f + 8.0f * b;
+                d.tx = std::max(-18.0f, std::min(18.0f, d.x + std::cos(ang) * rad));
+                d.tz = std::max(-18.0f, std::min(18.0f, d.z + std::sin(ang) * rad));
+                d.pause = 2.5f + 3.5f * a;
+            }
+        } else {
+            float step = DEER_SPEED * mDt;
+            d.x += dx / dist * step;
+            d.z += dz / dist * step;
+            d.yaw = std::atan2(dx, dz);
+        }
+        if (d.p)
+            d.p->setTransform(d.x, 0.0f, d.z, 0.0f);
+    }
 }
 
 void Window::resetGame() {
@@ -560,6 +671,7 @@ void Window::renderComposite() {
     glUniform1f(glGetUniformLocation(pid, "uBloomIntensity"), (mBloomReady && mBloomTex) ? mBloomIntensity : 0.0f);
     glUniform1f(glGetUniformLocation(pid, "uVignetteMax"), mVignetteMax);
     glUniform1f(glGetUniformLocation(pid, "uFuel"), mFuel);
+    glUniform1f(glGetUniformLocation(pid, "uFlash"), mFlash);
     tri.draw();
 }
 

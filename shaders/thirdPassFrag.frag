@@ -10,6 +10,7 @@ uniform float uExposure;       // ~1.0
 uniform float uBloomIntensity; // ~0.6
 uniform float uVignetteMax;    // 0..1, strength of the darkening
 uniform float uFuel;           // 0..1, lantern warmth -> vignette radius + grade
+uniform float uFlash;          // additive white flash on firefly collection
 
 vec3 ACESFilm(vec3 x) {
     const float a = 2.51, b = 0.03, c = 2.43, d = 0.59, e = 0.14;
@@ -40,5 +41,7 @@ void main() {
     mapped *= mix(cool, warm, uFuel);
 
     mapped += (hash21(gl_FragCoord.xy) - 0.5) / 255.0; // dither to kill banding
-    FragColor = vec4(pow(mapped, vec3(1.0 / 2.2)), 1.0); // single gamma, last
+    vec3 outc = pow(mapped, vec3(1.0 / 2.2));           // single gamma, last
+    outc += uFlash;                                     // additive flash in display space
+    FragColor = vec4(outc, 1.0);
 }
