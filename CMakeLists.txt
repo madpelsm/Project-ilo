@@ -35,6 +35,8 @@ if (EMSCRIPTEN)
     set(EM_LINK "${EM_LINK} --preload-file ${CMAKE_SOURCE_DIR}/shaders@/shaders")
     set(EM_LINK "${EM_LINK} --preload-file ${CMAKE_SOURCE_DIR}/shapes@/shapes")
     set(EM_LINK "${EM_LINK} --shell-file ${CMAKE_SOURCE_DIR}/web/shell.html")
+    # Phase 10 persistence: the EM_JS localStorage shim marshals the save string.
+    set(EM_LINK "${EM_LINK} -sEXPORTED_RUNTIME_METHODS=UTF8ToString,stringToUTF8,lengthBytesUTF8")
     set_target_properties(ilo PROPERTIES SUFFIX ".html" LINK_FLAGS "${EM_LINK}")
 else()
     # ---- Native desktop build target ----

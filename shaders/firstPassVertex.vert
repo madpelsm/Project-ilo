@@ -19,6 +19,7 @@ uniform vec4 uWake[8];      // woken Heartwoods: xy = centre XZ, z = ignite time
 uniform int uWakeCount;
 uniform float time;
 uniform float grassWave;   // 1.0 for the forest (animate low verts), 0.0 otherwise
+uniform float uBloom;      // global unison flare (0 in play; rises during The Long Dawn)
 
 out vec3 vWorldPos;
 out vec3 vNormal;
@@ -74,11 +75,15 @@ void main() {
     // out from it, leaving the region permanently brighter behind the front.
     float wake = 0.0;
     for (int i = 0; i < uWakeCount; i++) {
-        float radius = (time - uWake[i].z) * 32.0;
+        // A saved/loaded beacon pins a FROZEN region radius in .w (no replayed sweep);
+        // a live wake leaves .w = 0 and expands from its ignite time.
+        float radius = uWake[i].w > 0.5 ? uWake[i].w : (time - uWake[i].z) * 32.0;
         float d = distance(worldPos.xz, uWake[i].xy);
         if (radius > d)
             wake = max(wake, 0.5 + 1.6 * smoothstep(10.0, 0.0, abs(d - radius)));
     }
 
-    vEmissive = instanceTintEmissive.a * (1.0 + 1.6 * prox + wake);
+    // + uBloom: one global term flares every geometry-pass instance in unison when the
+    // Long Dawn breaks, then settles to a permanent low glow floor.
+    vEmissive = instanceTintEmissive.a * (1.0 + 1.6 * prox + wake) + uBloom;
 }

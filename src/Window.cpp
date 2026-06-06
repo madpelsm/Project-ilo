@@ -9,7 +9,14 @@
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
 #include <emscripten/html5.h>
+// "The vale remembers" on the web: the save blob lives in localStorage. Synchronous,
+// main-thread only, wrapped so private-mode / quota failures fail silently.
+EM_JS(void, ilo_save_blob, (const char *s), { try { localStorage.setItem("lumenmere.save", UTF8ToString(s)); } catch (e) {} });
+EM_JS(void, ilo_load_blob, (char *out, int max), {
+    try { stringToUTF8(localStorage.getItem("lumenmere.save") || "", out, max); } catch (e) { stringToUTF8("", out, max); }
+});
 #else
+#include <sys/stat.h>
 #include <thread>
 #endif
 
@@ -62,6 +69,22 @@ const float RIVER_RADIUS = 12.0f;
 const float RIVER_LIFT = 3.4f;       // updraft > gravity, so you rise/hold in a lane
 const float RIVER_SPEED = 18.0f;     // along-lane carry
 const float RIVER_TAU = 1.2f;        // easing time for the carry (no snap)
+
+// Phase 10 — Rest, Memory & The Long Dawn.
+const float LONG_DAWN_THRESHOLD = 0.999f; // radiance at which the climax breaks
+const float LONG_DAWN_DURATION = 10.0f;   // length of the unison flare
+const float LONG_DAWN_PEAK = 1.6f;        // apex of the global bloom term
+const float LONG_DAWN_FLOOR = 0.16f;      // permanent radiant glow it settles to
+const float DAWN_PHASE = 0.23f;           // the eternal golden dawn it holds
+const float LONG_DAWN_AURORA_SURGE = 0.9f;
+const float REST_EYE_DROP = 0.6f;
+const float REST_EASE = 3.0f;
+const float SCRUB_RATE = 0.10f;           // day-phase / sec while scrubbing in Rest
+const float PHOTO_FLASH = 0.10f;
+const float PHOTO_NOTE = 2.0f;
+const float AUTOSAVE_INTERVAL = 10.0f;
+const float SEED_PLANT_RADIUS = 6.0f;
+const float WAKE_FROZEN_RADIUS = 70.0f;   // loaded beacons read bloomed without re-sweeping
 
 // Calm fixed palette for woven constellations (indexed by completed count -> stable demo).
 glm::vec3 weavePalette(size_t i) {
@@ -120,6 +143,8 @@ void Window::sdlDie() {
     mBeaconField.destroy();
     mTwinField.destroy();
     mWindMotes.destroy();
+    mSeedField.destroy();
+    mSeedPatchField.destroy();
     for (auto &f : mFields)
         f.destroy();
     mGrass.destroy();
@@ -460,6 +485,35 @@ void Window::initAssets() {
         mWindMotes.buildDynamic(mote, (int)mWindRivers.size() * 28);
     }
     updateWindMotes();
+
+    // Phase 10: the seed that waits at the Mere after The Long Dawn (a glowing pod), and
+    // the patch a planted seed blooms. mSeedField holds 0..1 instance; the patch up to ~180.
+    mSeedField.buildDynamic(proc::makeMushroom(), 1);
+    {
+        proc::Rng fr(4242u);
+        mSeedPatchField.buildDynamic(proc::makeFlower(fr), 200);
+    }
+    mSeedPos = glm::vec3(0.0f, std::max(0.5f, ilo::terrainHeightFast(0.0f, 150.0f)) + 0.3f, 150.0f);
+
+    // Persistence — "the vale remembers." On the web it's always on (localStorage); on
+    // native it persists to ILO_SAVE or ~/.lumenmere_save, but stays inert during headless
+    // ILO_SHOT runs (unless ILO_SAVE is set) so screenshots never load a stale dev save.
+#ifdef __EMSCRIPTEN__
+    mPersistEnabled = true;
+#else
+    if (std::getenv("ILO_NOSAVE")) {
+        mPersistEnabled = false;
+    } else if (const char *sp = std::getenv("ILO_SAVE")) {
+        mSavePath = sp;
+        mPersistEnabled = true;
+    } else if (std::getenv("ILO_SHOT")) {
+        mPersistEnabled = false;
+    } else if (const char *h = std::getenv("HOME")) {
+        mSavePath = std::string(h) + "/.lumenmere_save";
+        mPersistEnabled = true;
+    }
+#endif
+    loadSession();
 }
 
 void Window::updateBeacons() {
@@ -743,6 +797,30 @@ void Window::run() {
     }
     if (std::getenv("ILO_DEMO_GLIDE")) // verify Phase 9 falling-leaf glide
         mDemoGlide = true;
+    // Phase 10 verification hooks.
+    if (const char *re = std::getenv("ILO_RADIANCE"))
+        mRadiance = std::max(0.0f, std::min(1.0f, (float)std::atof(re)));
+    if (const char *ld = std::getenv("ILO_LONGDAWN")) {
+        mState = GameState::Playing;
+        std::string v = ld;
+        if (v == "settled") {
+            mLongDawn = Dawn::Settled;
+            mBloom = LONG_DAWN_FLOOR;
+            mRadiance = 1.0f;
+            mSeedPresent = true;
+            if (!mFreezeDay)
+                mDayPhase = DAWN_PHASE;
+        } else { // "flare"
+            mLongDawn = Dawn::Flaring;
+            mDawnT = std::getenv("ILO_DAWN_T") ? (float)std::atof(std::getenv("ILO_DAWN_T")) : 5.0f;
+        }
+    }
+    if (std::getenv("ILO_REST")) {
+        mState = GameState::Playing;
+        enterRest();
+    }
+    if (std::getenv("ILO_JOURNAL"))
+        captureJournal();
 
     mPrevSeconds = SDL_GetTicks() / 1000.0;
     while (!closed) {
@@ -763,6 +841,7 @@ void Window::run() {
         render();
         if (capture) {
             std::cout << "Saved screenshot to " << shotPath << " (" << mWidth << "x" << mHeight << ")" << std::endl;
+            saveSession(); // persist the (possibly forced) state so a reload test can read it
             break;
         }
     }
@@ -771,7 +850,9 @@ void Window::run() {
 
 void Window::checkEvents() {
     const Uint8 *state = SDL_GetKeyboardState(NULL);
-    bool canMove = (mState == GameState::Playing || mState == GameState::Intro);
+    // While resting you sit still and own the clock: scrub the day with the arrows.
+    mScrubDir = mResting ? ((state[SDL_SCANCODE_RIGHT] ? 1 : 0) - (state[SDL_SCANCODE_LEFT] ? 1 : 0)) : 0;
+    bool canMove = (mState == GameState::Playing || mState == GameState::Intro) && !mResting;
     bool sprint = state[SDL_SCANCODE_LSHIFT] || state[SDL_SCANCODE_RSHIFT];
     bool moving = state[SDL_SCANCODE_W] || state[SDL_SCANCODE_S] || state[SDL_SCANCODE_A] || state[SDL_SCANCODE_D];
     mSprinting = canMove && sprint && moving;
@@ -840,11 +921,13 @@ void Window::checkEvents() {
                 resize();
             break;
         case SDL_QUIT:
+            saveSession(); // the vale remembers
             closed = true;
             break;
         case SDL_KEYDOWN:
             switch (event.key.keysym.scancode) {
             case SDL_SCANCODE_ESCAPE:
+                saveSession(); // the vale remembers
                 closed = true;
                 break;
             case SDL_SCANCODE_P:
@@ -862,6 +945,20 @@ void Window::checkEvents() {
                 break;
             case SDL_SCANCODE_Q: // calmly cancel the in-progress weave
                 clearWeave();
+                break;
+            case SDL_SCANCODE_T: // Rest / Observe — sit, hide the HUD, scrub the sky
+                if (mState == GameState::Playing) {
+                    if (mResting)
+                        exitRest();
+                    else
+                        enterRest();
+                }
+                break;
+            case SDL_SCANCODE_G: // Field Journal — keep a clean keepsake photo
+                captureJournal();
+                break;
+            case SDL_SCANCODE_E: // Plant the seed at the Mere (proximity-gated)
+                plantSeed();
                 break;
             case SDL_SCANCODE_R:
                 resetGame();
@@ -949,8 +1046,8 @@ void Window::packLights() {
         heart.posRadius[2] = mHeartPos.z;
         heart.posRadius[3] = glm::mix(4.0f, 20.0f, p);
         float intensity = glm::mix(0.3f, 4.0f, p);
-        if (mState == GameState::Won)
-            intensity = 4.5f + 1.0f * std::sin(6.2831f * 0.5f * mTime);
+        if (mLongDawn != Dawn::None) // the Wellheart blazes through The Long Dawn
+            intensity = 5.0f + 0.6f * std::sin(6.2831f * 0.5f * mTime) + 0.5f * mBloom;
         heart.colorIntensity[0] = mHeartColor.x;
         heart.colorIntensity[1] = mHeartColor.y;
         heart.colorIntensity[2] = mHeartColor.z;
@@ -998,7 +1095,10 @@ void Window::update() {
     // Ground-follow: ride the terrain at eye height (raise mEyeOffset to fly up).
     if (!mFreeCam) {
         float g = ilo::terrainHeightFast(mCamera.mPosition.x, mCamera.mPosition.z) + mEyeOffset;
-        mCamera.mPosition.y = g;
+        // Rest/Observe seats you a little lower (eased), without fighting the glide floor.
+        float restTarget = mResting ? REST_EYE_DROP : 0.0f;
+        mRestDrop += (restTarget - mRestDrop) * std::min(1.0f, REST_EASE * mDt);
+        mCamera.mPosition.y = g - mRestDrop;
         mCamera.update();
     }
 
@@ -1058,9 +1158,10 @@ void Window::update() {
                 mFuelW = std::max(0.0f, mFuelW - 1.0f * mDt); // gentle dim in the dark
         }
 
-        if (mCollected >= mTarget)
-            mState = GameState::Won;
+        // No win/lose screen: the firefly count only feeds Radiance now. The single
+        // ending is The Long Dawn — earned at full Radiance, and it never leaves play.
     }
+    updateLongDawn();
 
     // advance feedback timers
     mFlash = std::max(0.0f, mFlash - mDt * 1.5f);
@@ -1073,11 +1174,15 @@ void Window::update() {
         if (mComboTimer <= 0.0f)
             mCombo = 0;
     }
-    // Advance the day-night cycle; on a win, ease toward sunrise so dawn breaks.
-    if (!mFreezeDay) {
+    // The clock: while resting you OWN it (scrub with the arrows); otherwise it drifts,
+    // and once The Long Dawn breaks it eases to — and holds — an eternal golden dawn.
+    if (mResting) {
+        mDayPhase += mScrubDir * SCRUB_RATE * mDt;
+        mDayPhase -= std::floor(mDayPhase);
+    } else if (!mFreezeDay) {
         mDayPhase += mDt / mDayLength;
-        if (mState == GameState::Won)
-            mDayPhase += (0.23f - mDayPhase) * std::min(1.0f, mDt * 0.25f);
+        if (mLongDawn != Dawn::None)
+            mDayPhase += (DAWN_PHASE - mDayPhase) * std::min(1.0f, mDt * 0.5f);
         mDayPhase -= std::floor(mDayPhase); // wrap to [0,1)
     }
     mSky.update(mDayPhase, mRadiance);
@@ -1112,6 +1217,22 @@ void Window::update() {
             ++i;
     }
 
+    // Phase 10 feedback timers + a fresh bloom for a just-planted seed.
+    mPhotoNote = std::max(0.0f, mPhotoNote - mDt);
+    mDawnChorus = std::max(0.0f, mDawnChorus - mDt * 0.5f);
+    if (mPlantRequested) {
+        reseedSeedPatch();
+        mPlantRequested = false;
+    }
+    // Quiet autosave: persist the vale's accumulated light every so often when dirty.
+    if (mPersistEnabled) {
+        mSaveTimer += mDt;
+        if (mSaveDirty && mSaveTimer >= AUTOSAVE_INTERVAL) {
+            saveSession();
+            mSaveTimer = 0.0f;
+        }
+    }
+
     mFuel = mFuelW / FUEL_MAX;
     updateHeart();
     updateDeer();
@@ -1129,8 +1250,8 @@ void Window::updateHeart() {
     glm::vec3 ember(1.0f, 0.25f, 0.05f), gold(1.0f, 0.85f, 0.60f);
     mHeartColor = glm::mix(ember, gold, p);
     mHeartEmissive = glm::mix(0.15f, 4.5f, p);
-    if (mState == GameState::Won) // breathe when fully ablaze
-        mHeartEmissive = 5.0f + 0.8f * std::sin(6.2831f * 0.5f * mTime);
+    if (mLongDawn != Dawn::None) // the Heart breathes ablaze through The Long Dawn
+        mHeartEmissive = 5.0f + 0.8f * std::sin(6.2831f * 0.5f * mTime) + mBloom;
     if (mHeart)
         mHeart->setEmissive(glm::vec4(mHeartColor, mHeartEmissive));
 }
@@ -1494,6 +1615,231 @@ void Window::seedDemoConstellation() {
     mGlideCap = std::min(130.0f, mGlideCap + 10.0f);
 }
 
+void Window::updateLongDawn() {
+    if (mLongDawn == Dawn::None) {
+        // Earned at full Radiance — playing the whole loop (6 beacons, constellations,
+        // fireflies) gets you there. The one-way ratchet guarantees a single break.
+        if (mState == GameState::Playing && mRadiance >= LONG_DAWN_THRESHOLD) {
+            mLongDawn = Dawn::Flaring;
+            mDawnT = 0.0f;
+            mDawnChorus = 1.0f;
+            mWeaveAuroraBoost += LONG_DAWN_AURORA_SURGE;
+            mFlash = std::min(0.45f, mFlash + 0.45f);
+            markDirty();
+            saveSession();
+        }
+        mBloom = 0.0f;
+    } else if (mLongDawn == Dawn::Flaring) {
+        mDawnT += mDt;
+        float norm = std::min(1.0f, mDawnT / LONG_DAWN_DURATION);
+        mBloom = LONG_DAWN_FLOOR + (LONG_DAWN_PEAK - LONG_DAWN_FLOOR) * std::sin(3.14159265f * norm);
+        // A staggered dawn-chorus of light: warm sparks rising across the whole basin.
+        if (mDawnChorus > 0.0f && mPulses.size() < 8 && std::fmod(mDawnT, 0.4f) < mDt) {
+            float a = std::sin(mDawnT * 12.9898f) * 43758.5453f;
+            a -= std::floor(a);
+            float b = std::sin(mDawnT * 78.233f) * 12543.0f;
+            b -= std::floor(b);
+            float ang = a * 6.2831853f, rad = 40.0f + b * 260.0f;
+            mPulses.push_back({glm::vec3(std::cos(ang) * rad, 5.0f + b * 9.0f, std::sin(ang) * rad),
+                               glm::vec3(1.0f, 0.9f, 0.65f), 0.0f, 1.3f});
+        }
+        if (mDawnT >= LONG_DAWN_DURATION) {
+            mLongDawn = Dawn::Settled;
+            mBloom = LONG_DAWN_FLOOR;
+            mRadiance = 1.0f;
+            mSeedPresent = true; // a new seed glints at the Mere — the endless invitation
+            markDirty();
+            saveSession();
+        }
+    } else { // Settled — permanently radiant, forever
+        mBloom = LONG_DAWN_FLOOR;
+        mRadiance = 1.0f;
+    }
+
+    // The breathing seed at the water (present after the dawn / on a remembered vale).
+    std::vector<FieldInstance> s;
+    if (mSeedPresent) {
+        float breathe = 3.0f + 1.0f * std::sin(6.2831f * 0.5f * mTime);
+        FieldInstance fi;
+        fi.pos = mSeedPos;
+        fi.tintEmissive = glm::vec4(0.45f, 1.0f, 0.6f, breathe); // emerald-gold
+        fi.xform = glm::vec4(1.4f, mTime * 0.3f, 0.0f, 0.0f);
+        s.push_back(fi);
+    }
+    mSeedField.update(s);
+}
+
+void Window::enterRest() {
+    mResting = true;
+    mGlideVel = glm::vec2(0.0f);
+    mVertVel = 0.0f;
+    mAirborne = false;
+    mEyeOffset = 1.8f; // never rest mid-glide
+}
+void Window::exitRest() {
+    mResting = false;
+    mScrubDir = 0;
+}
+
+void Window::captureJournal() {
+    char name[64];
+    std::snprintf(name, sizeof(name), "journal_%d.ppm", mJournalSeq++);
+    std::string dir = ".";
+#ifndef __EMSCRIPTEN__
+    if (const char *d = std::getenv("ILO_JOURNAL_DIR"))
+        dir = d;
+    else if (const char *h = std::getenv("HOME"))
+        dir = std::string(h) + "/lumenmere-journal";
+    ::mkdir(dir.c_str(), 0755); // harmless if it already exists
+#endif
+    mJournalPath = dir + "/" + name;
+    mJournalShot = true; // render() grabs the composited, HUD-less frame this pass
+    mPhotoNote = PHOTO_NOTE;
+    mFlash = std::min(0.25f, mFlash + PHOTO_FLASH);
+}
+
+void Window::plantSeed() {
+    if (!mSeedPresent)
+        return;
+    float d = glm::length(glm::vec2(mCamera.mPosition.x - mSeedPos.x, mCamera.mPosition.z - mSeedPos.z));
+    if (d <= SEED_PLANT_RADIUS)
+        mPlantRequested = true; // bloom happens in update() (GL thread, outside a pass)
+}
+
+void Window::reseedSeedPatch() {
+    // One bounded, REBUILT field (never unbounded appends) — a fresh wedge of glowing
+    // blooms by the water, seeded off how many times you've planted.
+    proc::Rng rng(7777u + (unsigned)mSeedsPlanted * 131u);
+    glm::vec3 pal[4] = {{1.0f, 0.85f, 0.45f}, {1.0f, 0.55f, 0.75f}, {0.5f, 0.8f, 1.0f}, {0.8f, 0.55f, 1.0f}};
+    std::vector<FieldInstance> inst;
+    for (int i = 0; i < 180; i++) {
+        float ang = rng.range(0.0f, 6.2831853f), rad = rng.range(1.0f, 15.0f);
+        float x = mSeedPos.x + std::cos(ang) * rad, z = mSeedPos.z + std::sin(ang) * rad;
+        float h = ilo::terrainHeightFast(x, z);
+        if (h < 0.6f)
+            continue; // keep the new patch out of the Mere
+        FieldInstance fi;
+        fi.pos = glm::vec3(x, h, z);
+        fi.tintEmissive = glm::vec4(pal[(int)(rng.f() * 3.999f) & 3], rng.range(1.6f, 3.0f));
+        fi.xform = glm::vec4(rng.range(0.8f, 1.7f), rng.range(0.0f, 6.2831853f), 0.5f, rng.range(0.0f, 6.2831853f));
+        inst.push_back(fi);
+    }
+    mSeedPatchField.update(inst);
+    mSeedsPlanted++;
+    if (mPulses.size() < 8)
+        mPulses.push_back({mSeedPos + glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(0.5f, 1.0f, 0.6f), 0.0f, 0.9f});
+    mFlash = std::min(0.25f, mFlash + 0.12f);
+    markDirty();
+}
+
+ilo::SaveData Window::gatherSave() const {
+    ilo::SaveData s;
+    s.radiance = mRadiance;
+    s.collected = mCollected;
+    s.beaconCount = (int)mBeacons.size();
+    for (const Beacon &b : mBeacons)
+        s.beaconLit.push_back(b.lit ? 1 : 0);
+    for (const Constellation &c : mConstellations) {
+        ilo::SavedConstellation sc;
+        sc.color = c.color;
+        sc.stars = c.stars;
+        sc.ground = c.ground;
+        s.cons.push_back(sc);
+    }
+    s.longDawn = (mLongDawn != Dawn::None);
+    s.seedsPlanted = mSeedsPlanted;
+    s.seedPresent = mSeedPresent;
+    return s;
+}
+
+void Window::applySave(const ilo::SaveData &s) {
+    mRadiance = std::max(0.0f, std::min(1.0f, s.radiance));
+    mCollected = s.collected;
+    for (size_t i = 0; i < mBeacons.size() && i < s.beaconLit.size(); i++) {
+        if (s.beaconLit[i]) {
+            mBeacons[i].lit = true;
+            mBeacons[i].igniteTime = mTime - 1000.0f; // long past -> no ignite ramp
+            if (mWakeEvents.size() < 8) // a FROZEN-radius wake: region reads bloomed, no sweep
+                mWakeEvents.push_back(glm::vec4(mBeacons[i].pos.x, mBeacons[i].pos.z, mTime - 1000.0f, WAKE_FROZEN_RADIUS));
+        }
+    }
+    mGrovesAwake = 0;
+    for (const Beacon &b : mBeacons)
+        if (b.lit)
+            mGrovesAwake++;
+    mConstellations.clear();
+    for (const ilo::SavedConstellation &sc : s.cons) {
+        Constellation c;
+        c.color = sc.color;
+        c.stars = sc.stars;
+        c.ground = sc.ground;
+        c.bornTime = mTime - 100.0f; // already settled, no chain re-ignite
+        mConstellations.push_back(c);
+    }
+    int n = (int)mConstellations.size();
+    mBoonLantern = std::min(1.5f, 1.0f + 0.10f * n);
+    mGlideCap = std::min(130.0f, 90.0f + 10.0f * n);
+    if (n > 0) {
+        mAuroraColor = mConstellations.back().color;
+        mAuroraColorMix = mAuroraColorTarget = 0.7f;
+    }
+    mWeaveAuroraBoost = 0.0f;
+    mSeedsPlanted = s.seedsPlanted;
+    mSeedPresent = s.seedPresent;
+    if (s.longDawn) { // the vale you left was already in eternal dawn
+        mLongDawn = Dawn::Settled;
+        mBloom = LONG_DAWN_FLOOR;
+        mRadiance = 1.0f;
+        mDayPhase = DAWN_PHASE;
+        mSeedPresent = true;
+    }
+    updateBeacons();        // rebuild the beacon field to its lit/asleep state
+    updateConstellations(); // refill the fallen-twin markers from the loaded figures
+}
+
+void Window::saveSession() {
+    if (!mPersistEnabled)
+        return;
+    std::string blob = ilo::serialize(gatherSave());
+    mSaveDirty = false;
+#ifdef __EMSCRIPTEN__
+    ilo_save_blob(blob.c_str());
+#else
+    if (!mSavePath.empty()) {
+        FILE *f = std::fopen(mSavePath.c_str(), "wb");
+        if (f) {
+            std::fwrite(blob.data(), 1, blob.size(), f);
+            std::fclose(f);
+        }
+    }
+#endif
+}
+
+void Window::loadSession() {
+    if (!mPersistEnabled)
+        return;
+    std::string blob;
+#ifdef __EMSCRIPTEN__
+    std::vector<char> buf(ilo::SAVE_MAX_BYTES, 0);
+    ilo_load_blob(buf.data(), (int)buf.size());
+    blob = buf.data();
+#else
+    if (!mSavePath.empty()) {
+        FILE *f = std::fopen(mSavePath.c_str(), "rb");
+        if (f) {
+            std::vector<char> buf(ilo::SAVE_MAX_BYTES, 0);
+            size_t got = std::fread(buf.data(), 1, buf.size() - 1, f);
+            buf[got] = 0;
+            std::fclose(f);
+            blob = buf.data();
+        }
+    }
+#endif
+    ilo::SaveData s;
+    if (ilo::deserialize(blob, s))
+        applySave(s); // otherwise: a fresh, unremembered vale
+}
+
 void Window::resetGame() {
     mFuelW = FUEL_START;
     mCollected = 0;
@@ -1527,9 +1873,21 @@ void Window::resetGame() {
         d.trust = 0.0f;
         d.fleeTimer = 0.0f;
     }
+    // Phase 10: a new vale truly forgets — clear the dawn, rest, seed; write a fresh save.
+    mLongDawn = Dawn::None;
+    mDawnT = mBloom = mDawnChorus = 0.0f;
+    mResting = false;
+    mRestDrop = 0.0f;
+    mScrubDir = 0;
+    mSeedPresent = false;
+    mSeedsPlanted = 0;
+    mPlantRequested = false;
+    mSeedField.update({});
+    mSeedPatchField.update({});
     mCamera.mPosition = glm::vec3(0, 2, 18);
     mCamera.setYawPitch(0, 0);
     mFireflies.resetAll(glm::vec3(0, 2, 18));
+    saveSession();
 }
 
 void Window::renderGeometryPass() {
@@ -1556,6 +1914,7 @@ void Window::renderGeometryPass() {
     if (!mWakeEvents.empty())
         glUniform4fv(glGetUniformLocation(pid, "uWake"), (GLsizei)mWakeEvents.size(), (const float *)mWakeEvents.data());
     glUniform1f(glGetUniformLocation(pid, "time"), mTime);
+    glUniform1f(glGetUniformLocation(pid, "uBloom"), mBloom); // The Long Dawn unison flare
     // Default per-instance transform for non-field geometry (scale 1, no yaw/wind).
     glVertexAttrib4f(6, 1.0f, 0.0f, 0.0f, 0.0f);
 
@@ -1574,6 +1933,8 @@ void Window::renderGeometryPass() {
     mBeaconField.render(pid);
     mTwinField.render(pid);
     mWindMotes.render(pid);
+    mSeedField.render(pid);
+    mSeedPatchField.render(pid);
     mBirds.render(pid);
     mButterflies.render(pid);
     mMushrooms.render(pid, mTime);
@@ -1907,6 +2268,18 @@ void Window::renderHud() {
     glm::vec4 warm(1.0f, 0.95f, 0.8f, 1.0f);
     char buf[80];
 
+    // Rest / Observe: clear the screen of gameplay UI and just let the vale fill it.
+    // Only a fading keepsake note and a quiet scrub cue remain.
+    if (mResting) {
+        if (mPhotoNote > 0.0f)
+            mHud.textCentered(0.5f, 0.5f, 0.026f, "a moment kept",
+                              glm::vec4(1.0f, 0.97f, 0.85f, std::min(0.7f, mPhotoNote)));
+        mHud.textCentered(0.5f, 0.93f, 0.020f, "RESTING   < >  SCRUB THE SKY    [T] RISE    [G] PHOTO",
+                          glm::vec4(0.8f, 0.85f, 0.95f, 0.45f));
+        mHud.end();
+        return;
+    }
+
     // Firefly counter + world radiance (top-left).
     std::snprintf(buf, sizeof(buf), "FIREFLIES  %d / %d", std::min(mCollected, mTarget), mTarget);
     mHud.text(0.04f, 0.05f, 0.040f, buf, warm);
@@ -1972,18 +2345,20 @@ void Window::renderHud() {
         mHud.textCentered(0.5f, 0.42f, 0.07f, "PAUSED", warm);
         mHud.textCentered(0.5f, 0.54f, 0.035f, "[P] RESUME", warm);
     }
-    if (mState == GameState::Won) {
-        mHud.rect(0, 0, 1, 1, glm::vec4(0.10f, 0.15f, 0.10f, 0.55f));
-        mHud.textCentered(0.5f, 0.34f, 0.07f, "THE GROVE AWAKENS", glm::vec4(0.8f, 1.0f, 0.7f, 1.0f));
-        std::snprintf(buf, sizeof(buf), "FIREFLIES GATHERED  %d / %d", std::min(mCollected, mTarget), mTarget);
-        mHud.textCentered(0.5f, 0.46f, 0.040f, buf, warm);
-        mHud.textCentered(0.5f, 0.56f, 0.035f, "PRESS [R] TO PLAY AGAIN", warm);
+    // No win/lose screen — the only ending is The Long Dawn, and it stays in the world.
+    // A single, brief, in-world line marks the moment it breaks; then silence.
+    if (mLongDawn == Dawn::Flaring && mDawnT < 6.0f) {
+        float a = std::min(0.85f, mDawnT * 0.6f) * std::min(1.0f, (6.0f - mDawnT));
+        mHud.textCentered(0.5f, 0.30f, 0.05f, "THE LONG DAWN", glm::vec4(1.0f, 0.92f, 0.7f, a));
     }
-    if (mState == GameState::Lost) {
-        mHud.rect(0, 0, 1, 1, glm::vec4(0.0f, 0.0f, 0.02f, 0.85f));
-        mHud.textCentered(0.5f, 0.36f, 0.07f, "LOST IN THE DARK", glm::vec4(0.6f, 0.6f, 0.85f, 1.0f));
-        mHud.textCentered(0.5f, 0.48f, 0.034f, "YOUR LANTERN WENT COLD.", warm);
-        mHud.textCentered(0.5f, 0.56f, 0.034f, "PRESS [R] TO TRY AGAIN", warm);
+    // A fading keepsake confirmation, and a quiet whisper toward the Mere's new seed.
+    if (mPhotoNote > 0.0f)
+        mHud.textCentered(0.5f, 0.50f, 0.026f, "a moment kept", glm::vec4(1.0f, 0.97f, 0.85f, std::min(0.7f, mPhotoNote)));
+    if (mLongDawn == Dawn::Settled && mSeedPresent) {
+        float d = glm::length(glm::vec2(mCamera.mPosition.x - mSeedPos.x, mCamera.mPosition.z - mSeedPos.z));
+        if (d < 26.0f)
+            mHud.textCentered(0.5f, 0.78f, 0.022f, d <= SEED_PLANT_RADIUS ? "[E]  plant the seed" : "a new seed waits at the water",
+                              glm::vec4(0.6f, 1.0f, 0.7f, 0.55f));
     }
 
     mHud.end();
@@ -1999,6 +2374,11 @@ void Window::render() {
     renderParticles();
     renderBloom();
     renderComposite();
+    // Field Journal: grab the fully-composited, HUD-LESS frame as a clean keepsake.
+    if (mJournalShot) {
+        ilo::savePPM(mJournalPath, mWidth, mHeight);
+        mJournalShot = false;
+    }
     renderHud();
 
     if (mPendingShot) { // capture the freshly-rendered back buffer before presenting

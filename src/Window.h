@@ -9,6 +9,7 @@
 #include "Mushroom.h"
 #include "Player.h"
 #include "Render.h"
+#include "Save.h"
 #include "Sky.h"
 #include "Terrain.h"
 #include "Shader.h"
@@ -195,6 +196,30 @@ class Window {
     };
     std::vector<WindRiver> mWindRivers;
     InstancedField mWindMotes;          // drifting motes that make a lane visible
+
+    // Phase 10 — Rest, Memory & The Long Dawn (the soft, endless ending).
+    enum class Dawn { None, Flaring, Settled };
+    Dawn mLongDawn = Dawn::None;        // orthogonal to GameState — climax never leaves Playing
+    float mDawnT = 0.0f;               // seconds since the Long Dawn broke
+    float mBloom = 0.0f;               // global unison-flare emissive (-> uBloom)
+    float mDawnChorus = 0.0f;          // ramps at the flare, decays (drives the rising motes)
+    bool mResting = false;             // Rest/Observe: seated, HUD hidden, time scrubbable
+    float mRestDrop = 0.0f;            // eased seated eye-drop
+    int mScrubDir = 0;                 // -1/+1 while scrubbing the day in Rest
+    bool mJournalShot = false;         // capture a clean (HUD-less) keepsake this frame
+    std::string mJournalPath;
+    int mJournalSeq = 0;
+    float mPhotoNote = 0.0f;           // fading "a moment kept" confirmation
+    bool mSeedPresent = false;         // a glowing seed waits at the Mere after The Long Dawn
+    glm::vec3 mSeedPos = glm::vec3(0);
+    int mSeedsPlanted = 0;
+    bool mPlantRequested = false;
+    InstancedField mSeedField;         // the single breathing seed at the water
+    InstancedField mSeedPatchField;    // the fresh patch a planted seed blooms
+    bool mPersistEnabled = false;      // "the vale remembers" (gated by ILO_SAVE in headless)
+    bool mSaveDirty = false;
+    float mSaveTimer = 0.0f;
+    std::string mSavePath;
     int mDemoDeer = 0;                  // headless: 1 = a following companion, 2 = rush test
     bool mDemoGlide = false;            // headless: drive the glide to prove leaf-fall
     bool mDemoGlideSeeded = false;
@@ -254,6 +279,17 @@ class Window {
     void updateDeer();
     void updateGlide();        // falling-leaf vertical + airborne drift + wind-rivers
     void updateWindMotes();    // refresh the mote ribbons that mark the lanes
+    void updateLongDawn();     // the climax: world-wide unison bloom + permanent settle
+    void enterRest();
+    void exitRest();
+    void captureJournal();     // a clean HUD-less keepsake photo
+    void plantSeed();
+    void reseedSeedPatch();
+    void loadSession();        // "the vale remembers"
+    void saveSession();
+    void markDirty() { mSaveDirty = true; }
+    ilo::SaveData gatherSave() const;
+    void applySave(const ilo::SaveData &s);
     void updateBeacons();
     void pinSeedStar();
     void clearWeave();
