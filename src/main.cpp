@@ -40,18 +40,28 @@ int main(int argc, char *argv[]) {
     w.addNPC(*heart);
     w.mHeart = heart;
 
-    // A few deer quietly wandering the meadows.
-    Player *deer1 = new Player("./shapes/Deer1.obj");
-    deer1->setScale(glm::vec3(0.8f, 0.8f, 0.8f));
-    w.addDeer(*deer1, -150.0f, 90.0f);
-
-    Player *deer2 = new Player("./shapes/Deer1.obj");
-    deer2->setScale(glm::vec3(0.8f, 0.8f, 0.8f));
-    w.addDeer(*deer2, 130.0f, -120.0f);
-
-    Player *deer3 = new Player("./shapes/Deer1.obj");
-    deer3->setScale(glm::vec3(0.8f, 0.8f, 0.8f));
-    w.addDeer(*deer3, 60.0f, 200.0f);
+    // Two herds of deer grazing the meadows — one on the near south shore (in view at
+    // spawn), one across the Mere on the far shore, so the world feels inhabited from the
+    // first moment. They wander as cohesive groups (see Window::updateDeer).
+    // yawOffset corrects Deer1.obj's modelled forward axis so they face where they walk.
+    const float DEER_YAW = 3.14159265f; // model faces -Z; rotate 180° to face heading
+    std::vector<Player *> deer;
+    auto spawnDeer = [&](float x, float z, int herd) {
+        Player *d = new Player("./shapes/Deer1.obj");
+        d->setScale(glm::vec3(1.35f, 1.35f, 1.35f));
+        w.addDeer(*d, x, z, herd, DEER_YAW);
+        deer.push_back(d);
+    };
+    // Herd 0 — the south-east meadow (player's right as they face the lake): solid land
+    // on the rising ring, easy to wander into early.
+    spawnDeer(180.0f, 175.0f, 0);
+    spawnDeer(215.0f, 150.0f, 0);
+    spawnDeer(160.0f, 205.0f, 0);
+    spawnDeer(140.0f, 165.0f, 0);
+    // Herd 1 — the far north shore, grazing in view across the water at spawn.
+    spawnDeer(-44.0f, -210.0f, 1);
+    spawnDeer(6.0f, -232.0f, 1);
+    spawnDeer(54.0f, -205.0f, 1);
 
     w.loadGeometries();
     w.initAssets();
@@ -59,8 +69,7 @@ int main(int argc, char *argv[]) {
 
     delete forest;
     delete heart;
-    delete deer1;
-    delete deer2;
-    delete deer3;
+    for (Player *d : deer)
+        delete d;
     return 0;
 }

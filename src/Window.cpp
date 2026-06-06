@@ -73,6 +73,7 @@ void Window::sdlDie() {
     mFireflies.destroy();
     mMushrooms.destroy();
     mBirds.destroy();
+    mButterflies.destroy();
     mBeaconField.destroy();
     for (auto &f : mFields)
         f.destroy();
@@ -336,6 +337,7 @@ void Window::initAssets() {
     mFireflies.init(60);
     mMushrooms.init(10);
     mBirds.init(30);
+    mButterflies.init(140);
 
     // Heartwood beacons scattered across the regions, waiting to be woken.
     const float ang[6] = {0.5f, 1.5f, 2.5f, 3.6f, 4.6f, 5.7f};
@@ -402,26 +404,10 @@ void Window::scatterWorld() {
         return 1.0f - n.y;
     };
 
-    // Dense grass that follows the camera: a disc-shaped pattern recentred each time
-    // the player crosses a cell, so the meadow is always lush underfoot.
-    {
-        const int GRASS = 14000;
-        const float R = 72.0f;
-        proc::Mesh tuft = proc::makeGrassTuft(rng);
-        mGrassBase.clear();
-        mGrassBase.reserve(GRASS);
-        for (int i = 0; i < GRASS; i++) {
-            float ang = rng.range(0, 6.2831853f);
-            float rad = R * std::sqrt(rng.f()); // uniform over the disc
-            FieldInstance fi;
-            fi.pos = glm::vec3(std::cos(ang) * rad, 0.0f, std::sin(ang) * rad); // offset only
-            fi.tintEmissive = glm::vec4(rng.range(0.8f, 1.1f), rng.range(0.9f, 1.2f), rng.range(0.8f, 1.1f), 0.0f);
-            fi.xform = glm::vec4(rng.range(0.7f, 1.6f), rng.range(0, 6.2831853f), 0.9f, rng.range(0, 6.2831853f));
-            mGrassBase.push_back(fi);
-        }
-        mGrass.buildDynamic(tuft, GRASS);
-        updateGrass(true);
-    }
+    // Dense grass around the player. Placement is anchored to ABSOLUTE world cells
+    // (not a camera-relative pattern) so it never swims as you move.
+    mGrass.buildDynamic(proc::makeGrassTuft(rng), 16000);
+    updateGrass(true);
 
     // Conifers on the slopes (two baked variants, gentle sway).
     for (int v = 0; v < 2; v++) {
@@ -529,35 +515,44 @@ void Window::scatterWorld() {
 }
 
 void Window::updateGrass(bool force) {
-    if (mGrassBase.empty())
-        return;
     glm::vec2 cam(mCamera.mPosition.x, mCamera.mPosition.z);
-    glm::vec2 cell = glm::floor(cam / 8.0f) * 8.0f; // snap to an 8m grid
+    glm::vec2 cell = glm::floor(cam / 6.0f) * 6.0f;
     if (!force && cell == mGrassCenter)
         return;
     mGrassCenter = cell;
 
-    const float R = 72.0f, e = 2.0f;
+    const float R = 64.0f, s = 1.1f;
+    auto hash = [](int a, int b) {
+        unsigned int h = (unsigned int)(a * 73856093) ^ (unsigned int)(b * 19349663);
+        h ^= h >> 13;
+        h *= 0x85ebca6bu;
+        h ^= h >> 16;
+        return (h & 0xFFFFFFu) / (float)0x1000000;
+    };
+    int gx0 = (int)std::floor((cam.x - R) / s), gx1 = (int)std::floor((cam.x + R) / s);
+    int gz0 = (int)std::floor((cam.y - R) / s), gz1 = (int)std::floor((cam.y + R) / s);
     std::vector<FieldInstance> inst;
-    inst.reserve(mGrassBase.size());
-    for (const FieldInstance &b : mGrassBase) {
-        float wx = cell.x + b.pos.x, wz = cell.y + b.pos.z;
-        float h = ilo::terrainHeight(wx, wz);
-        if (h < 0.4f)
-            continue; // keep grass out of the lake
-        float d = std::sqrt(b.pos.x * b.pos.x + b.pos.z * b.pos.z);
-        float fade = 1.0f - std::max(0.0f, (d - R * 0.6f) / (R * 0.4f)); // soft disc edge
-        if (fade <= 0.02f)
-            continue;
-        float hl = ilo::terrainHeight(wx - e, wz), hr = ilo::terrainHeight(wx + e, wz);
-        float hd = ilo::terrainHeight(wx, wz - e), hu = ilo::terrainHeight(wx, wz + e);
-        float ny = (2 * e) / std::sqrt((hl - hr) * (hl - hr) + (2 * e) * (2 * e) + (hd - hu) * (hd - hu));
-        if ((1.0f - ny) > 0.5f)
-            continue; // too steep
-        FieldInstance fi = b;
-        fi.pos = glm::vec3(wx, h, wz);
-        fi.xform.x = b.xform.x * fade;
-        inst.push_back(fi);
+    inst.reserve(16000);
+    for (int gz = gz0; gz <= gz1 && (int)inst.size() < 16000; gz++) {
+        for (int gx = gx0; gx <= gx1 && (int)inst.size() < 16000; gx++) {
+            float h0 = hash(gx, gz), h1 = hash(gx * 3 + 1, gz), h2 = hash(gx, gz * 7 + 2), h3 = hash(gx - 5, gz * 2 + 9);
+            float wx = gx * s + (h0 - 0.5f) * s, wz = gz * s + (h1 - 0.5f) * s; // jittered, but world-stable
+            float dx = wx - cam.x, dz = wz - cam.y, d2 = dx * dx + dz * dz;
+            if (d2 > R * R)
+                continue;
+            float ty = ilo::terrainHeightFast(wx, wz);
+            if (ty < 0.5f)
+                continue; // keep grass out of the lake
+            float d = std::sqrt(d2);
+            float fade = 1.0f - std::max(0.0f, (d - R * 0.55f) / (R * 0.45f));
+            if (fade <= 0.02f)
+                continue;
+            FieldInstance fi;
+            fi.pos = glm::vec3(wx, ty, wz);
+            fi.tintEmissive = glm::vec4(0.8f + 0.3f * h2, 0.9f + 0.3f * h3, 0.78f + 0.22f * h0, 0.0f);
+            fi.xform = glm::vec4((0.7f + 0.95f * h3) * fade, h2 * 6.2831853f, 0.9f, h0 * 6.2831853f);
+            inst.push_back(fi);
+        }
     }
     mGrass.update(inst);
 }
@@ -833,7 +828,7 @@ void Window::packLights() {
 void Window::update() {
     // Ground-follow: ride the terrain at eye height (raise mEyeOffset to fly up).
     if (!mFreeCam) {
-        float g = ilo::terrainHeight(mCamera.mPosition.x, mCamera.mPosition.z) + mEyeOffset;
+        float g = ilo::terrainHeightFast(mCamera.mPosition.x, mCamera.mPosition.z) + mEyeOffset;
         mCamera.mPosition.y = g;
         mCamera.update();
     }
@@ -912,6 +907,7 @@ void Window::update() {
     }
     mSky.update(mDayPhase, mRadiance);
     mBirds.update(mDt, mTime, mSky.nightAmount);
+    mButterflies.update(mDt, mTime, mSky.nightAmount);
     for (size_t i = 0; i < mPulses.size();) {
         mPulses[i].age += mDt;
         if (mPulses[i].age >= mPulses[i].life)
@@ -942,7 +938,7 @@ void Window::updateHeart() {
         mHeart->setEmissive(glm::vec4(mHeartColor, mHeartEmissive));
 }
 
-void Window::addDeer(Player &deer, float x, float z) {
+void Window::addDeer(Player &deer, float x, float z, int herd, float yawOffset) {
     addNPC(deer);
     DeerAgent d;
     d.p = &deer;
@@ -950,39 +946,66 @@ void Window::addDeer(Player &deer, float x, float z) {
     d.z = z;
     d.tx = x;
     d.tz = z;
+    d.herd = herd;
+    d.yawOffset = yawOffset;
     d.pause = 1.0f + 3.0f * ((x * 13.0f + z * 7.0f) - std::floor(x * 13.0f + z * 7.0f));
+    if (herd >= (int)mHerdAnchors.size())
+        mHerdAnchors.resize(herd + 1, glm::vec2(x, z));
     mDeer.push_back(d);
-    deer.setTransform(x, ilo::terrainHeight(x, z), z, 0.0f);
+    deer.setTransform(x, ilo::terrainHeightFast(x, z), z, 0.0f);
 }
 
 void Window::updateDeer() {
     if (mState != GameState::Playing && mState != GameState::Intro)
         return;
+
+    // Each herd's anchor wanders slowly across the meadow; the deer graze around it,
+    // so the herd reads as a group drifting together rather than scattering.
+    for (size_t h = 0; h < mHerdAnchors.size(); h++) {
+        glm::vec2 &a = mHerdAnchors[h];
+        float t = mTime * 0.05f + (float)h * 2.3f;
+        glm::vec2 dir(std::cos(t * 0.7f + std::sin(t)), std::sin(t * 0.9f + std::cos(t * 1.3f)));
+        a += dir * (DEER_SPEED * 0.35f * mDt);
+        float r = std::sqrt(a.x * a.x + a.y * a.y);
+        // Keep herds on the solid meadow ring — never drifting into the central Mere
+        // or out past the tree line.
+        if (r > 1e-3f) {
+            float cr = std::max(195.0f, std::min(340.0f, r));
+            a *= cr / r;
+        }
+    }
+
     for (DeerAgent &d : mDeer) {
         float dx = d.tx - d.x, dz = d.tz - d.z;
         float dist = std::sqrt(dx * dx + dz * dz);
-        if (dist < 0.2f) {
+        if (dist < 0.3f) {
             d.pause -= mDt;
             if (d.pause <= 0.0f) {
-                // pick a new wander target within the grove
+                // Graze to a new spot near the herd anchor (cohesion), with a little
+                // personal jitter so the deer don't stack on one point.
                 float a = std::sin(mTime * 1.3f + d.x * 2.1f + d.z) * 43758.5453f;
                 a = a - std::floor(a);
-                float b = std::sin(mTime * 0.7f + d.z * 1.7f) * 12543.1234f;
+                float b = std::sin(mTime * 0.7f + d.z * 1.7f + d.x) * 12543.1234f;
                 b = b - std::floor(b);
-                float ang = a * 6.2831f;
-                float rad = 4.0f + 8.0f * b;
-                d.tx = std::max(-520.0f, std::min(520.0f, d.x + std::cos(ang) * rad));
-                d.tz = std::max(-520.0f, std::min(520.0f, d.z + std::sin(ang) * rad));
-                d.pause = 2.5f + 3.5f * a;
+                glm::vec2 anchor = (d.herd < (int)mHerdAnchors.size()) ? mHerdAnchors[d.herd] : glm::vec2(d.x, d.z);
+                float ang = a * 6.2831853f;
+                float rad = 3.0f + 11.0f * b;
+                d.tx = std::max(-520.0f, std::min(520.0f, anchor.x + std::cos(ang) * rad));
+                d.tz = std::max(-520.0f, std::min(520.0f, anchor.y + std::sin(ang) * rad));
+                d.pause = 2.0f + 4.0f * a;
             }
         } else {
             float step = DEER_SPEED * mDt;
             d.x += dx / dist * step;
             d.z += dz / dist * step;
-            d.yaw = std::atan2(dx, dz);
+            // Smoothly turn toward the heading (shortest angular path) so the deer
+            // bank into their walk instead of snapping around.
+            float target = std::atan2(dx, dz) + d.yawOffset;
+            float diff = std::fmod(target - d.yaw + 9.42477796f, 6.2831853f) - 3.14159265f;
+            d.yaw += diff * std::min(1.0f, 6.0f * mDt);
         }
         if (d.p)
-            d.p->setTransform(d.x, ilo::terrainHeight(d.x, d.z), d.z, 0.0f);
+            d.p->setTransform(d.x, ilo::terrainHeightFast(d.x, d.z), d.z, d.yaw);
     }
 }
 
@@ -1049,6 +1072,7 @@ void Window::renderGeometryPass() {
     mGrass.render(pid);
     mBeaconField.render(pid);
     mBirds.render(pid);
+    mButterflies.render(pid);
     mMushrooms.render(pid, mTime);
     mFireflies.render(pid, mTime);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -1121,6 +1145,8 @@ void Window::renderLightingPass() {
     glUniform1f(glGetUniformLocation(pid, "uFogBaseY"), mFogBaseY);
     glUniform3f(glGetUniformLocation(pid, "uSunDir"), mSky.sunDir.x, mSky.sunDir.y, mSky.sunDir.z);
     glUniform3f(glGetUniformLocation(pid, "uSunlight"), mSky.sunlight.x, mSky.sunlight.y, mSky.sunlight.z);
+    glm::vec3 rim = (mSky.skyHorizon * 0.9f + mSky.sunlight * 0.25f + mSky.ambient * 2.0f) * 1.5f;
+    glUniform3f(glGetUniformLocation(pid, "uRimColor"), rim.x, rim.y, rim.z);
 
     lightUBO.bindBase(0);
     tri.draw();

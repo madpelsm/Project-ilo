@@ -100,8 +100,10 @@ void Player::setInstances(const std::vector<glm::vec3> &offsets, const std::vect
 }
 
 void Player::update() {
+    // Yaw about the vertical axis so wandering creatures face the way they walk
+    // (the Heart and forest pass angle 0, so this is identity for them).
     mTransformation = glm::mat4(glm::translate(glm::mat4(1), glm::vec3(mX, mY, mZ)) *
-                                glm::rotate(glm::mat4(1), mRotAngle, glm::vec3(0, 0, 1)) * glm::scale(glm::mat4(1), mScale));
+                                glm::rotate(glm::mat4(1), mRotAngle, glm::vec3(0, 1, 0)) * glm::scale(glm::mat4(1), mScale));
 }
 
 void Player::render(int shaderProgramID) {

@@ -1,5 +1,6 @@
 #pragma once
 #include "Birds.h"
+#include "Butterflies.h"
 #include "Camera.h"
 #include "Firefly.h"
 #include "GameObject.h"
@@ -57,7 +58,7 @@ class Window {
   public:
     Camera mCamera;
     SDL_Window *mSDLwindow = nullptr;
-    SDL_GLContext glContext;
+    SDL_GLContext glContext = nullptr;
     SDL_Event event;
 
     // shader programs (HUD owns its own program)
@@ -92,11 +93,11 @@ class Window {
     InstancedField mBeaconField;
     std::vector<glm::vec4> mWakeEvents; // (centreX, centreZ, igniteTime, 0)
     int mGrovesAwake = 0;
-    std::vector<FieldInstance> mGrassBase; // disc-offset pattern (recentred on the camera)
     glm::vec2 mGrassCenter = glm::vec2(1e9f, 1e9f);
     FireflySystem mFireflies;
     MushroomField mMushrooms;
     Birds mBirds;
+    Butterflies mButterflies;
     Hud mHud;
     float mEyeOffset = 1.8f; // camera height above the ground (rises when flying)
     bool mFreeCam = false;   // disable ground-follow (aerial screenshots)
@@ -145,8 +146,13 @@ class Window {
     struct DeerAgent {
         Player *p = nullptr;
         float x = 0, z = 0, tx = 0, tz = 0, yaw = 0, pause = 0;
+        int herd = 0;        // deer sharing a herd drift and graze together
+        float yawOffset = 0; // model's forward axis correction (set per species)
     };
     std::vector<DeerAgent> mDeer;
+    // Slow-drifting anchor each herd grazes around, so the deer read as a group
+    // moving through the meadow rather than wandering at random.
+    std::vector<glm::vec2> mHerdAnchors;
 
     // sky / fog / ambient
     glm::vec3 mAmbient = glm::vec3(0.012f, 0.016f, 0.028f);
@@ -198,7 +204,7 @@ class Window {
     void updateDeer();
     void updateBeacons();
     void resetGame();
-    void addDeer(Player &deer, float x, float z);
+    void addDeer(Player &deer, float x, float z, int herd = 0, float yawOffset = 0.0f);
 
     void setvSync(bool vSyncStatus);
     void setMouseSensitivity(float _sensitivity);
