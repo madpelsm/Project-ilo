@@ -31,6 +31,38 @@ const float FLARE_COOLDOWN = 1.5f;
 const float FLARE_MULT = 2.0f;
 const float DEER_SPEED = 1.0f;
 
+// Phase 9 — falling-leaf glide (a velocity model over the height-above-ground mEyeOffset).
+const float GLIDE_GRAVITY = 2.6f;  // gentle downward accel when airborne, hands off
+const float TERMINAL_FALL = 4.0f;  // capped descent — luxurious, never a plummet
+const float GROUND_EPS = 0.05f;    // above this height-above-ground we are "airborne"
+const float GLIDE_SPEED = 7.5f;    // airborne horizontal cruise (faster than a walk)
+const float AIR_ACCEL = 2.2f;      // how quickly the glide drift eases toward intent
+const float AIR_DRAG = 0.5f;       // coast + decay when you let go of the sticks
+
+// Phase 9 — deer trust / curiosity / follow (no-fail, forgiving).
+const float RUSH_SPEED = 5.2f;       // player speed that reads as "rushing"
+const float FLEE_RADIUS = 14.0f;
+const float FLEE_TIME = 3.0f;
+const float FLEE_TRUST_DROP = 0.35f; // partial, never instant 0
+const float FLEE_SPEED = 4.2f;       // a brisk trot, not a panic gallop
+const float TRUST_RADIUS = 12.0f;
+const float CALM_SPEED = 2.2f;
+const float TRUST_GAIN = 0.5f;
+const float NOTICE_RADIUS = 28.0f;
+const float TRUST_DECAY = 0.02f;     // a befriended deer stays friendly for minutes
+const float CURIOUS_THRESH = 0.35f;
+const float FOLLOW_THRESH = 0.75f;
+const float CURIOUS_GAP = 6.0f;
+const float FOLLOW_GAP = 3.5f;
+const float FOLLOW_SPEED = 3.2f;     // keeps up with a walk, not a sprint
+const float DEER_WATER_MIN = 0.8f;   // deer never step onto the mirror-Mere
+
+// Phase 9 — wind-rivers (invisible lift+carry lanes you glide into, marked by motes).
+const float RIVER_RADIUS = 12.0f;
+const float RIVER_LIFT = 3.4f;       // updraft > gravity, so you rise/hold in a lane
+const float RIVER_SPEED = 18.0f;     // along-lane carry
+const float RIVER_TAU = 1.2f;        // easing time for the carry (no snap)
+
 // Calm fixed palette for woven constellations (indexed by completed count -> stable demo).
 glm::vec3 weavePalette(size_t i) {
     static const glm::vec3 pal[4] = {
@@ -87,6 +119,7 @@ void Window::sdlDie() {
     mButterflies.destroy();
     mBeaconField.destroy();
     mTwinField.destroy();
+    mWindMotes.destroy();
     for (auto &f : mFields)
         f.destroy();
     mGrass.destroy();
@@ -409,6 +442,24 @@ void Window::initAssets() {
 
     // Fallen-twin markers for woven constellations (same glassy spire as a beacon).
     mTwinField.buildDynamic(proc::makeBeacon(), MAX_CSTARS);
+
+    // Wind-rivers: a few invisible lift+carry lanes you can glide into, made visible by
+    // streams of drifting motes. Lanes climb (y = ground + offset) so they read as rising.
+    auto lane = [](float ax, float az, float ah, float bx, float bz, float bh) {
+        WindRiver r;
+        r.a = glm::vec3(ax, ilo::terrainHeightFast(ax, az) + ah, az);
+        r.b = glm::vec3(bx, ilo::terrainHeightFast(bx, bz) + bh, bz);
+        return r;
+    };
+    mWindRivers.push_back(lane(150.0f, 150.0f, 8.0f, 30.0f, -120.0f, 48.0f));  // Mere crossing
+    mWindRivers.push_back(lane(-280.0f, 120.0f, 30.0f, 120.0f, 280.0f, 45.0f)); // ring loop
+    mWindRivers.push_back(lane(260.0f, -40.0f, 12.0f, 360.0f, -260.0f, 70.0f)); // Reach updraft
+    {
+        proc::Mesh mote;
+        proc::sphere(mote, glm::vec3(0.0f), 1.0f, 2, 6, glm::vec3(0.7f, 0.9f, 1.0f), glm::vec3(8.0f, 0.1f, 0.0f));
+        mWindMotes.buildDynamic(mote, (int)mWindRivers.size() * 28);
+    }
+    updateWindMotes();
 }
 
 void Window::updateBeacons() {
@@ -673,6 +724,25 @@ void Window::run() {
     }
     if (std::getenv("ILO_DEMO_SKY")) // verify Phase 8: a woven sky in front of the demo camera
         seedDemoConstellation();
+    if (const char *de = std::getenv("ILO_DEMO_DEER")) { // verify Phase 9 inhabitants
+        mDemoDeer = std::atoi(de);
+        mState = GameState::Playing;
+        if (!mDeer.empty()) {
+            glm::vec3 look = glm::normalize(mCamera.mLookDir);
+            glm::vec2 fwd(look.x, look.z);
+            if (glm::length(fwd) > 1e-4f)
+                fwd = glm::normalize(fwd);
+            DeerAgent &d = mDeer[0]; // a companion placed just ahead of the demo camera
+            d.x = mCamera.mPosition.x + fwd.x * 4.5f;
+            d.z = mCamera.mPosition.z + fwd.y * 4.5f;
+            d.tx = d.x;
+            d.tz = d.z;
+            d.trust = (mDemoDeer == 2) ? 0.95f : 1.0f; // rush test starts trusting, then flees
+            d.yaw = std::atan2(mCamera.mPosition.x - d.x, mCamera.mPosition.z - d.z) + d.yawOffset;
+        }
+    }
+    if (std::getenv("ILO_DEMO_GLIDE")) // verify Phase 9 falling-leaf glide
+        mDemoGlide = true;
 
     mPrevSeconds = SDL_GetTicks() / 1000.0;
     while (!closed) {
@@ -707,21 +777,41 @@ void Window::checkEvents() {
     mSprinting = canMove && sprint && moving;
     mMoving = canMove && moving;
     float speed = (sprint ? SPRINT_SPEED : WALK_SPEED) * mDt;
+    // Vertical intent is recorded as latches; the falling-leaf integration happens in
+    // updateGlide() (so the headless loop, which skips checkEvents, can drive it too).
+    mAscendInput = canMove && state[SDL_SCANCODE_SPACE];
+    mDescendInput = canMove && (state[SDL_SCANCODE_LCTRL] || state[SDL_SCANCODE_C]);
     if (canMove) {
-        if (state[SDL_SCANCODE_W])
-            mCamera.moveForward(speed);
-        if (state[SDL_SCANCODE_S])
-            mCamera.moveForward(-speed);
-        if (state[SDL_SCANCODE_A])
-            mCamera.moveRight(-speed);
-        if (state[SDL_SCANCODE_D])
-            mCamera.moveRight(speed);
-        // Rise/sink relative to the ground (ground-follow keeps you on the surface
-        // at mEyeOffset; raising it lets you drift up and glide tranquilly).
-        if (state[SDL_SCANCODE_SPACE])
-            mEyeOffset = std::min(mGlideCap, mEyeOffset + FLY_VERT_SPEED * mDt);
-        if (state[SDL_SCANCODE_LCTRL] || state[SDL_SCANCODE_C])
-            mEyeOffset = std::max(1.8f, mEyeOffset - FLY_VERT_SPEED * mDt);
+        if (!mAirborne) {
+            // Grounded: the tranquil default, direct walk/strafe (unchanged).
+            if (state[SDL_SCANCODE_W])
+                mCamera.moveForward(speed);
+            if (state[SDL_SCANCODE_S])
+                mCamera.moveForward(-speed);
+            if (state[SDL_SCANCODE_A])
+                mCamera.moveRight(-speed);
+            if (state[SDL_SCANCODE_D])
+                mCamera.moveRight(speed);
+        } else {
+            // Airborne: steer the glide — accumulate drift toward the wish direction
+            // (translation itself is applied in updateGlide so it also runs headless).
+            glm::vec3 f = mCamera.mLookDir;
+            glm::vec2 fwd(f.x, f.z);
+            if (glm::length(fwd) > 1e-4f)
+                fwd = glm::normalize(fwd);
+            glm::vec2 right(fwd.y, -fwd.x); // 90° in XZ
+            glm::vec2 wish(0.0f);
+            if (state[SDL_SCANCODE_W]) wish += fwd;
+            if (state[SDL_SCANCODE_S]) wish -= fwd;
+            if (state[SDL_SCANCODE_D]) wish += right;
+            if (state[SDL_SCANCODE_A]) wish -= right;
+            if (glm::length(wish) > 1e-4f) {
+                wish = glm::normalize(wish) * (sprint ? GLIDE_SPEED * 1.15f : GLIDE_SPEED);
+                mGlideVel += (wish - mGlideVel) * std::min(1.0f, AIR_ACCEL * mDt);
+            } else {
+                mGlideVel *= std::max(0.0f, 1.0f - AIR_DRAG * mDt); // coast like a leaf
+            }
+        }
     }
 
     while (SDL_PollEvent(&event)) {
@@ -901,12 +991,22 @@ void Window::packLights() {
 }
 
 void Window::update() {
+    // Falling-leaf glide: integrate the vertical velocity into mEyeOffset and carry the
+    // airborne horizontal drift (also lifts/sweeps you when inside a wind-river).
+    updateGlide();
+
     // Ground-follow: ride the terrain at eye height (raise mEyeOffset to fly up).
     if (!mFreeCam) {
         float g = ilo::terrainHeightFast(mCamera.mPosition.x, mCamera.mPosition.z) + mEyeOffset;
         mCamera.mPosition.y = g;
         mCamera.update();
     }
+
+    // Player horizontal speed (deer read this as calm vs rushing). Guard the first frame.
+    glm::vec2 cxz(mCamera.mPosition.x, mCamera.mPosition.z);
+    mPlayerSpeed = mPrevCamInit ? glm::length(cxz - mPrevCamXZ) / std::max(mDt, 1e-4f) : 0.0f;
+    mPrevCamXZ = cxz;
+    mPrevCamInit = true;
 
     // Floating origin: snap to a 128m grid near the camera (only the XZ plane).
     mRenderOrigin = glm::vec3(std::round(mCamera.mPosition.x / 128.0f) * 128.0f, 0.0f,
@@ -1072,38 +1172,211 @@ void Window::updateDeer() {
         }
     }
 
+    glm::vec2 cam(mCamera.mPosition.x, mCamera.mPosition.z);
+    bool rushing = mSprinting || mPlayerSpeed > RUSH_SPEED;
+
     for (DeerAgent &d : mDeer) {
-        float dx = d.tx - d.x, dz = d.tz - d.z;
-        float dist = std::sqrt(dx * dx + dz * dz);
-        if (dist < 0.3f) {
-            d.pause -= mDt;
-            if (d.pause <= 0.0f) {
-                // Graze to a new spot near the herd anchor (cohesion), with a little
-                // personal jitter so the deer don't stack on one point.
-                float a = std::sin(mTime * 1.3f + d.x * 2.1f + d.z) * 43758.5453f;
-                a = a - std::floor(a);
-                float b = std::sin(mTime * 0.7f + d.z * 1.7f + d.x) * 12543.1234f;
-                b = b - std::floor(b);
-                glm::vec2 anchor = (d.herd < (int)mHerdAnchors.size()) ? mHerdAnchors[d.herd] : glm::vec2(d.x, d.z);
-                float ang = a * 6.2831853f;
-                float rad = 3.0f + 11.0f * b;
-                d.tx = std::max(-520.0f, std::min(520.0f, anchor.x + std::cos(ang) * rad));
-                d.tz = std::max(-520.0f, std::min(520.0f, anchor.y + std::sin(ang) * rad));
-                d.pause = 2.0f + 4.0f * a;
+        float pd = std::sqrt((d.x - cam.x) * (d.x - cam.x) + (d.z - cam.y) * (d.z - cam.y));
+        if (d.fleeTimer > 0.0f)
+            d.fleeTimer -= mDt;
+        // Trust is no-fail and forgiving: warms when you linger close and calm, drops
+        // only partially when you rush a deer, and fades slowly when you wander off.
+        if (rushing && pd < FLEE_RADIUS && d.fleeTimer <= 0.0f) {
+            d.fleeTimer = FLEE_TIME;
+            d.trust = std::max(0.0f, d.trust - FLEE_TRUST_DROP);
+        } else if (d.fleeTimer <= 0.0f) {
+            if (pd < TRUST_RADIUS && mPlayerSpeed < CALM_SPEED)
+                d.trust = std::min(1.0f, d.trust + TRUST_GAIN * (1.0f - pd / TRUST_RADIUS) *
+                                                       (1.0f - mPlayerSpeed / CALM_SPEED) * mDt);
+            if (pd > NOTICE_RADIUS)
+                d.trust = std::max(0.0f, d.trust - TRUST_DECAY * mDt);
+        }
+
+        // Mood: flee (rushed) -> follow (befriended) -> curious -> wary herd grazing.
+        bool faceCam = false;
+        float spd = DEER_SPEED;
+        bool wander = false;
+        if (d.fleeTimer > 0.0f) {
+            glm::vec2 away(d.x - cam.x, d.z - cam.y);
+            float l = glm::length(away);
+            away = l > 1e-4f ? away / l : glm::vec2(0.0f, 1.0f);
+            d.tx = d.x + away.x * 8.0f;
+            d.tz = d.z + away.y * 8.0f;
+            spd = FLEE_SPEED;
+        } else if (d.trust >= FOLLOW_THRESH) {
+            glm::vec2 toD(d.x - cam.x, d.z - cam.y);
+            float l = glm::length(toD);
+            glm::vec2 dir = l > 1e-4f ? toD / l : glm::vec2(0.0f, 1.0f);
+            d.tx = cam.x + dir.x * FOLLOW_GAP; // settle at your heel, halt facing you
+            d.tz = cam.y + dir.y * FOLLOW_GAP;
+            spd = FOLLOW_SPEED;
+            faceCam = true;
+        } else if (d.trust >= CURIOUS_THRESH) {
+            if (pd > CURIOUS_GAP) {
+                glm::vec2 toC = glm::normalize(glm::vec2(cam.x - d.x, cam.y - d.z));
+                d.tx = d.x + toC.x * 1.5f; // edge shyly closer
+                d.tz = d.z + toC.y * 1.5f;
+            } else {
+                d.tx = d.x; // hold and watch
+                d.tz = d.z;
+            }
+            faceCam = true;
+        } else {
+            wander = true;
+        }
+
+        if (wander) {
+            float dx = d.tx - d.x, dz = d.tz - d.z;
+            float dist = std::sqrt(dx * dx + dz * dz);
+            if (dist < 0.3f) {
+                d.pause -= mDt;
+                if (d.pause <= 0.0f) {
+                    // Graze to a new spot near the herd anchor (cohesion) + personal jitter.
+                    float a = std::sin(mTime * 1.3f + d.x * 2.1f + d.z) * 43758.5453f;
+                    a = a - std::floor(a);
+                    float b = std::sin(mTime * 0.7f + d.z * 1.7f + d.x) * 12543.1234f;
+                    b = b - std::floor(b);
+                    glm::vec2 anchor = (d.herd < (int)mHerdAnchors.size()) ? mHerdAnchors[d.herd] : glm::vec2(d.x, d.z);
+                    float ang = a * 6.2831853f;
+                    float rad = 3.0f + 11.0f * b;
+                    d.tx = std::max(-520.0f, std::min(520.0f, anchor.x + std::cos(ang) * rad));
+                    d.tz = std::max(-520.0f, std::min(520.0f, anchor.y + std::sin(ang) * rad));
+                    d.pause = 2.0f + 4.0f * a;
+                }
+            } else {
+                float step = DEER_SPEED * mDt;
+                d.x += dx / dist * step;
+                d.z += dz / dist * step;
+                float target = std::atan2(dx, dz) + d.yawOffset;
+                float diff = std::fmod(target - d.yaw + 9.42477796f, 6.2831853f) - 3.14159265f;
+                d.yaw += diff * std::min(1.0f, 6.0f * mDt);
             }
         } else {
-            float step = DEER_SPEED * mDt;
-            d.x += dx / dist * step;
-            d.z += dz / dist * step;
-            // Smoothly turn toward the heading (shortest angular path) so the deer
-            // bank into their walk instead of snapping around.
-            float target = std::atan2(dx, dz) + d.yawOffset;
+            // Curious / following / fleeing: walk toward the chosen target, but never
+            // step onto the mirror-Mere (revert into-water steps).
+            if (ilo::terrainHeightFast(d.tx, d.tz) < DEER_WATER_MIN) {
+                d.tx = d.x;
+                d.tz = d.z;
+            }
+            float dx = d.tx - d.x, dz = d.tz - d.z;
+            float dist = std::sqrt(dx * dx + dz * dz);
+            if (dist > 0.05f) {
+                float step = std::min(spd * mDt, dist); // don't overshoot the heel gap
+                d.x += dx / dist * step;
+                d.z += dz / dist * step;
+            }
+            float target = faceCam ? std::atan2(cam.x - d.x, cam.y - d.z) + d.yawOffset
+                                   : std::atan2(dx, dz) + d.yawOffset;
             float diff = std::fmod(target - d.yaw + 9.42477796f, 6.2831853f) - 3.14159265f;
             d.yaw += diff * std::min(1.0f, 6.0f * mDt);
         }
         if (d.p)
             d.p->setTransform(d.x, ilo::terrainHeightFast(d.x, d.z), d.z, d.yaw);
     }
+}
+
+void Window::updateGlide() {
+    // Headless demo hooks (checkEvents is skipped headless, so drive the latches here).
+    if (mDemoGlide) {
+        mAscendInput = (mTime < 1.6f); // climb briefly, then release into the leaf-fall
+        mDescendInput = false;
+        if (!mAscendInput && mAirborne && !mDemoGlideSeeded) {
+            glm::vec2 f(mCamera.mLookDir.x, mCamera.mLookDir.z);
+            if (glm::length(f) > 1e-4f)
+                mGlideVel = glm::normalize(f) * GLIDE_SPEED;
+            mDemoGlideSeeded = true;
+        }
+    }
+    if (mDemoDeer == 2 && !mDeer.empty()) { // scripted rush so flee is provable headless
+        glm::vec3 &cp = mCamera.mPosition;
+        glm::vec2 to(mDeer[0].x - cp.x, mDeer[0].z - cp.z);
+        float dd = glm::length(to);
+        if (dd > 2.5f) {
+            to /= dd;
+            cp.x += to.x * SPRINT_SPEED * mDt;
+            cp.z += to.y * SPRINT_SPEED * mDt;
+        }
+        mSprinting = true;
+    }
+
+    const float floor = 1.8f;
+    if (mAscendInput)
+        mVertVel = FLY_VERT_SPEED; // powered climb / flap
+    else if (mDescendInput)
+        mVertVel = -FLY_VERT_SPEED * 1.5f; // active dive
+    else if (mEyeOffset > floor + GROUND_EPS)
+        mVertVel = std::max(-TERMINAL_FALL, mVertVel - GLIDE_GRAVITY * mDt); // falling leaf
+    else
+        mVertVel = 0.0f;
+
+    // Wind-rivers: inside a lane an updraft holds/lifts you and the flow sweeps you along.
+    bool inRiver = false;
+    if (mEyeOffset > floor + GROUND_EPS) {
+        glm::vec3 cam = mCamera.mPosition;
+        for (const WindRiver &r : mWindRivers) {
+            glm::vec3 ab = r.b - r.a;
+            float L2 = glm::dot(ab, ab);
+            float u = L2 > 1e-4f ? std::max(0.0f, std::min(1.0f, glm::dot(cam - r.a, ab) / L2)) : 0.0f;
+            glm::vec3 c = r.a + ab * u;
+            if (glm::length(cam - c) < RIVER_RADIUS) {
+                inRiver = true;
+                mVertVel = std::max(mVertVel, RIVER_LIFT);
+                glm::vec3 fd = glm::normalize(ab);
+                glm::vec2 flow(fd.x, fd.z);
+                mGlideVel += (flow * RIVER_SPEED - mGlideVel) * std::min(1.0f, mDt / RIVER_TAU);
+                break;
+            }
+        }
+    }
+
+    mEyeOffset = std::max(floor, std::min(mGlideCap, mEyeOffset + mVertVel * mDt));
+    mAirborne = mEyeOffset > floor + GROUND_EPS;
+
+    if (mAirborne) {
+        mCamera.mPosition.x += mGlideVel.x * mDt;
+        mCamera.mPosition.z += mGlideVel.y * mDt;
+        mCamera.mPosition.x = std::max(-WORLD_BOUND, std::min(WORLD_BOUND, mCamera.mPosition.x));
+        mCamera.mPosition.z = std::max(-WORLD_BOUND, std::min(WORLD_BOUND, mCamera.mPosition.z));
+    } else {
+        mVertVel = 0.0f;
+        mGlideVel = glm::vec2(0.0f); // rest on landing — no bounce, no drift
+    }
+
+    if ((mDemoGlide || mDemoDeer) && (mDbgFrame++ % 15 == 0)) {
+        float dist = mDeer.empty() ? 0.0f
+                                   : std::sqrt((mDeer[0].x - mCamera.mPosition.x) * (mDeer[0].x - mCamera.mPosition.x) +
+                                               (mDeer[0].z - mCamera.mPosition.z) * (mDeer[0].z - mCamera.mPosition.z));
+        std::printf("P9 t=%.2f eye=%.2f vy=%.2f glide=%.2f air=%d%s | deer0 trust=%.2f flee=%.2f dist=%.1f\n",
+                    mTime, mEyeOffset, mVertVel, glm::length(mGlideVel), (int)mAirborne, inRiver ? " RIVER" : "",
+                    mDeer.empty() ? 0.0f : mDeer[0].trust, mDeer.empty() ? 0.0f : mDeer[0].fleeTimer, dist);
+    }
+    updateWindMotes();
+}
+
+void Window::updateWindMotes() {
+    if (mWindRivers.empty())
+        return;
+    const int per = 28;
+    std::vector<FieldInstance> inst;
+    inst.reserve(mWindRivers.size() * per);
+    for (const WindRiver &r : mWindRivers) {
+        glm::vec3 ab = r.b - r.a;
+        float len = std::max(1.0f, glm::length(ab));
+        for (int i = 0; i < per; i++) {
+            float t = i / (float)per + mTime * (RIVER_SPEED * 0.12f) / len;
+            t = t - std::floor(t); // motes stream along the lane and recycle
+            glm::vec3 base = r.a + ab * t;
+            float w = i * 1.7f + mTime * 0.8f;
+            glm::vec3 off(std::cos(w) * RIVER_RADIUS * 0.5f, std::sin(w * 1.3f) * 2.0f, std::sin(w) * RIVER_RADIUS * 0.5f);
+            float fade = std::sin(t * 3.14159f); // dim toward the ends
+            FieldInstance fi;
+            fi.pos = base + off;
+            fi.tintEmissive = glm::vec4(0.6f, 0.85f, 1.0f, 0.5f + 1.4f * fade);
+            fi.xform = glm::vec4(0.25f, w, 0.0f, 0.0f);
+            inst.push_back(fi);
+        }
+    }
+    mWindMotes.update(inst);
 }
 
 void Window::pinSeedStar() {
@@ -1244,6 +1517,16 @@ void Window::resetGame() {
     mAuroraColorMix = mAuroraColorTarget = mWeaveAuroraBoost = 0.0f;
     mBoonLantern = 1.0f;
     mGlideCap = 90.0f;
+    // Phase 9: settle traversal + forget the herd's trust on a fresh start.
+    mVertVel = 0.0f;
+    mGlideVel = glm::vec2(0.0f);
+    mAirborne = false;
+    mPlayerSpeed = 0.0f;
+    mPrevCamInit = false;
+    for (DeerAgent &d : mDeer) {
+        d.trust = 0.0f;
+        d.fleeTimer = 0.0f;
+    }
     mCamera.mPosition = glm::vec3(0, 2, 18);
     mCamera.setYawPitch(0, 0);
     mFireflies.resetAll(glm::vec3(0, 2, 18));
@@ -1290,6 +1573,7 @@ void Window::renderGeometryPass() {
     mGrass.render(pid);
     mBeaconField.render(pid);
     mTwinField.render(pid);
+    mWindMotes.render(pid);
     mBirds.render(pid);
     mButterflies.render(pid);
     mMushrooms.render(pid, mTime);
@@ -1663,6 +1947,17 @@ void Window::renderHud() {
         mHud.textCentered(0.5f, 0.20f, 0.026f, buf, glm::vec4(mWeaveColor, 0.9f));
         mHud.textCentered(0.5f, 0.235f, 0.020f, "[RMB] PIN   [F] FINISH   [Q] CLEAR",
                           glm::vec4(0.8f, 0.85f, 0.95f, 0.6f));
+    }
+
+    // A soft, fading note when a deer befriends you (Phase 9). No meters, no numbers.
+    if (mState == GameState::Playing) {
+        float best = 0.0f;
+        for (const DeerAgent &d : mDeer)
+            best = std::max(best, d.fleeTimer > 0.0f ? 0.0f : d.trust);
+        if (best >= FOLLOW_THRESH)
+            mHud.textCentered(0.5f, 0.16f, 0.024f, "a deer walks with you", glm::vec4(0.85f, 0.92f, 0.8f, 0.55f));
+        else if (best >= CURIOUS_THRESH)
+            mHud.textCentered(0.5f, 0.16f, 0.024f, "a deer watches you", glm::vec4(0.82f, 0.88f, 0.95f, 0.5f));
     }
 
     if (mState == GameState::Intro) {

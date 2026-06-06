@@ -177,8 +177,28 @@ class Window {
         float x = 0, z = 0, tx = 0, tz = 0, yaw = 0, pause = 0;
         int herd = 0;        // deer sharing a herd drift and graze together
         float yawOffset = 0; // model's forward axis correction (set per species)
+        float trust = 0.0f;  // 0 wary .. 1 follows at your heel (Phase 9)
+        float fleeTimer = 0.0f; // >0 while trotting away after being rushed
     };
     std::vector<DeerAgent> mDeer;
+
+    // Phase 9 — falling-leaf glide + the befriended herd + wind-rivers.
+    float mVertVel = 0.0f;             // vertical velocity of the height-above-ground
+    bool mAirborne = false;
+    glm::vec2 mGlideVel = glm::vec2(0); // carried horizontal drift while aloft
+    bool mAscendInput = false, mDescendInput = false;
+    glm::vec2 mPrevCamXZ = glm::vec2(0);
+    bool mPrevCamInit = false;
+    float mPlayerSpeed = 0.0f;          // horizontal m/s (deer read this as calm/rushing)
+    struct WindRiver {
+        glm::vec3 a = glm::vec3(0), b = glm::vec3(0); // lane endpoints (world)
+    };
+    std::vector<WindRiver> mWindRivers;
+    InstancedField mWindMotes;          // drifting motes that make a lane visible
+    int mDemoDeer = 0;                  // headless: 1 = a following companion, 2 = rush test
+    bool mDemoGlide = false;            // headless: drive the glide to prove leaf-fall
+    bool mDemoGlideSeeded = false;
+    int mDbgFrame = 0;
     // Slow-drifting anchor each herd grazes around, so the deer read as a group
     // moving through the meadow rather than wandering at random.
     std::vector<glm::vec2> mHerdAnchors;
@@ -232,6 +252,8 @@ class Window {
     void packLights();
     void updateHeart();
     void updateDeer();
+    void updateGlide();        // falling-leaf vertical + airborne drift + wind-rivers
+    void updateWindMotes();    // refresh the mote ribbons that mark the lanes
     void updateBeacons();
     void pinSeedStar();
     void clearWeave();
