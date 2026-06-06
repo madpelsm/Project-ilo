@@ -42,6 +42,7 @@ struct Framebuffer {
     GLuint fbo = 0;
     std::vector<Texture2D> colors;
     GLuint depthRbo = 0;
+    GLuint depthTex = 0; // samplable depth attachment (shadow map)
     int w = 0, h = 0;
 
     void create(int width, int height) {
@@ -70,6 +71,28 @@ struct Framebuffer {
         glRenderbufferStorage(GL_RENDERBUFFER, fmt, w, h);
         glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, depthRbo);
     }
+    // A SAMPLABLE depth texture set up for hardware shadow comparison (sampler2DShadow,
+    // LEQUAL). Makes this a depth-only FBO: no colour, draw/read buffers set to NONE
+    // (required for completeness on WebGL2). Returns the texture id.
+    GLuint addDepthTexture(GLenum internalFmt = GL_DEPTH_COMPONENT24) {
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+        glGenTextures(1, &depthTex);
+        glBindTexture(GL_TEXTURE_2D, depthTex);
+        glTexImage2D(GL_TEXTURE_2D, 0, internalFmt, w, h, 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_FUNC, GL_LEQUAL);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, depthTex, 0);
+        GLenum none = GL_NONE;
+        glDrawBuffers(1, &none);
+        glReadBuffer(GL_NONE);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        return depthTex;
+    }
+    GLuint depth() const { return depthTex; }
     void setDrawBuffers() {
         std::vector<GLenum> bufs;
         for (size_t i = 0; i < colors.size(); ++i)
@@ -94,6 +117,10 @@ struct Framebuffer {
         if (depthRbo) {
             glDeleteRenderbuffers(1, &depthRbo);
             depthRbo = 0;
+        }
+        if (depthTex) {
+            glDeleteTextures(1, &depthTex);
+            depthTex = 0;
         }
         if (fbo) {
             glDeleteFramebuffers(1, &fbo);
