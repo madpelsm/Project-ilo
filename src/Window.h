@@ -60,8 +60,10 @@ class Window {
     SDL_Event event;
 
     // shader programs (HUD owns its own program)
-    ShaderProgram geometryProg, lightingProg, brightProg, blurProg, compositeProg, skyProg, waterProg, godrayProg;
+    ShaderProgram geometryProg, lightingProg, brightProg, blurProg, compositeProg, skyProg, waterProg, godrayProg, particleProg;
     GLuint mWaterVao = 0, mWaterVbo = 0;
+    GLuint mParticleVao = 0, mParticleVbo = 0;
+    int mParticleCount = 0;
 
     // render targets + helpers
     ilo::Framebuffer gBuffer, hdrFBO, bloomA, bloomB, skyFBO, godrayFBO;
@@ -100,6 +102,7 @@ class Window {
     float mFuelW = 70.0f;  // warmth in fuel units
     int mCollected = 0;
     int mTarget = 30;
+    float mRadiance = 0.0f; // 0..1 meta-progress; opens the world dim -> radiant
     float mIntroTimer = 1.5f;
     bool mSprinting = false;
     bool mFreezeFuel = false; // screenshot/testing: hold fuel constant
@@ -167,6 +170,7 @@ class Window {
     void renderLightingPass();
     void renderWater();
     void renderGodrays();
+    void renderParticles();
     void renderBloom();
     void renderComposite();
     void renderHud();

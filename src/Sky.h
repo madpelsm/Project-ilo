@@ -84,5 +84,12 @@ struct Sky {
         auroraStrength = nightAmount * (0.35f + 0.65f * std::max(0.0f, std::min(1.0f, radiance01)));
         galaxyStrength = starFade;
         cloudCoverage = 0.40f + 0.10f * dayAmt;
+
+        // Radiance (the player's progress) opens the world dim -> radiant: a warmer
+        // ambient lift, thinner fog so distant vistas appear, and a brighter resting sky.
+        float rad = std::max(0.0f, std::min(1.0f, radiance01));
+        ambient += glm::vec3(0.045f, 0.05f, 0.055f) * rad;
+        fogDensity *= (1.0f - 0.45f * rad);
+        skyHorizon += glm::vec3(0.05f, 0.045f, 0.06f) * rad * (0.4f + 0.6f * nightAmount);
     }
 };

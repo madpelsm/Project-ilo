@@ -90,9 +90,13 @@ void Window::sdlDie() {
     skyProg.deleteProgram();
     waterProg.deleteProgram();
     godrayProg.deleteProgram();
+    particleProg.deleteProgram();
     if (mWaterVao)
         glDeleteVertexArrays(1, &mWaterVao);
     glDeleteBuffers(1, &mWaterVbo);
+    if (mParticleVao)
+        glDeleteVertexArrays(1, &mParticleVao);
+    glDeleteBuffers(1, &mParticleVbo);
     if (glContext) {
         SDL_GL_DeleteContext(glContext);
         glContext = nullptr;
@@ -165,6 +169,7 @@ void Window::initGL() {
     buildProgram(skyProg, "./shaders/fullscreen.vert", "./shaders/sky.frag");
     buildProgram(waterProg, "./shaders/water.vert", "./shaders/water.frag");
     buildProgram(godrayProg, "./shaders/fullscreen.vert", "./shaders/godray.frag");
+    buildProgram(particleProg, "./shaders/particles.vert", "./shaders/particles.frag");
 
     // Static sampler bindings.
     lightingProg.useProgram();
@@ -207,6 +212,24 @@ void Window::initGL() {
     tri.init();
     lightUBO.init();
     mHud.init();
+
+    // Atmosphere motes: a static buffer of random seeds animated entirely in the VS.
+    {
+        mParticleCount = 3500;
+        std::vector<glm::vec4> seeds(mParticleCount);
+        unsigned int s = 0x1234abcdu;
+        auto rnd = [&]() { s ^= s << 13; s ^= s >> 17; s ^= s << 5; return (s & 0xFFFFFF) / (float)0x1000000; };
+        for (auto &v : seeds)
+            v = glm::vec4(rnd(), rnd(), rnd(), rnd());
+        glGenVertexArrays(1, &mParticleVao);
+        glBindVertexArray(mParticleVao);
+        glGenBuffers(1, &mParticleVbo);
+        glBindBuffer(GL_ARRAY_BUFFER, mParticleVbo);
+        glBufferData(GL_ARRAY_BUFFER, seeds.size() * sizeof(glm::vec4), seeds.data(), GL_STATIC_DRAW);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, sizeof(glm::vec4), 0);
+        glBindVertexArray(0);
+    }
 
     // 1x1 black texture used as the bloom input until the bloom pass exists.
     glGenTextures(1, &mBlackTex);
@@ -725,6 +748,7 @@ void Window::update() {
             mCombo = (mComboTimer > 0.0f) ? mCombo + 1 : 1;
             mComboTimer = 3.0f;
             mFuelW = std::min(FUEL_MAX, mFuelW + (mCombo - 1) * 1.5f);
+            mRadiance = std::min(1.0f, mRadiance + 0.012f); // the vale grows brighter
             if (mPulses.size() < 8)
                 mPulses.push_back({e.pos, e.color, 0.0f, 0.35f});
             mFlash = std::min(0.25f, mFlash + 0.15f);
@@ -733,6 +757,7 @@ void Window::update() {
         float shroomWarmth = mMushrooms.update(mDt, mTime, mCamera.mPosition, 2.0f);
         if (shroomWarmth > 0.0f) {
             mFuelW = std::min(FUEL_MAX, mFuelW + shroomWarmth);
+            mRadiance = std::min(1.0f, mRadiance + shroomWarmth * 0.0006f);
             mFlash = std::min(0.25f, mFlash + 0.12f);
         }
 
@@ -772,8 +797,7 @@ void Window::update() {
             mDayPhase += (0.23f - mDayPhase) * std::min(1.0f, mDt * 0.25f);
         mDayPhase -= std::floor(mDayPhase); // wrap to [0,1)
     }
-    float radiance01 = std::min(1.0f, mCollected / (float)mTarget);
-    mSky.update(mDayPhase, radiance01);
+    mSky.update(mDayPhase, mRadiance);
     for (size_t i = 0; i < mPulses.size();) {
         mPulses[i].age += mDt;
         if (mPulses[i].age >= mPulses[i].life)
@@ -850,6 +874,7 @@ void Window::updateDeer() {
 void Window::resetGame() {
     mFuelW = FUEL_START;
     mCollected = 0;
+    mRadiance = 0.0f;
     mState = GameState::Intro;
     mIntroTimer = 1.5f;
     mCombo = 0;
@@ -1058,6 +1083,41 @@ void Window::renderGodrays() {
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
+void Window::renderParticles() {
+    if (!mParticleVao)
+        return;
+    hdrFBO.bind(); // hdr depth holds the scene (blitted in the water pass) -> motes occlude
+    glViewport(0, 0, mWidth, mHeight);
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LESS);
+    glDepthMask(GL_FALSE);
+    glDisable(GL_CULL_FACE);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_ONE, GL_ONE); // additive glow
+#ifndef __EMSCRIPTEN__
+    glEnable(GL_PROGRAM_POINT_SIZE);
+#endif
+    particleProg.useProgram();
+    GLuint pid = particleProg.getProgramID();
+    glm::mat4 persp = projection();
+    glUniformMatrix4fv(glGetUniformLocation(pid, "persp"), 1, GL_FALSE, glm::value_ptr(persp));
+    glUniformMatrix4fv(glGetUniformLocation(pid, "view"), 1, GL_FALSE, glm::value_ptr(mCamera.mView));
+    glUniform3f(glGetUniformLocation(pid, "uEye"), mCamera.mPosition.x, mCamera.mPosition.y, mCamera.mPosition.z);
+    glUniform1f(glGetUniformLocation(pid, "uTime"), mTime);
+    glUniform1f(glGetUniformLocation(pid, "uBoxR"), 40.0f);
+    glUniform3f(glGetUniformLocation(pid, "uDrift"), 0.6f, 0.35f, 0.4f);
+    glUniform1f(glGetUniformLocation(pid, "uSizePx"), 220.0f);
+    float night = mSky.nightAmount;
+    glm::vec3 col = glm::mix(glm::vec3(0.9f, 0.85f, 0.6f) * 0.30f, glm::vec3(1.0f, 0.5f, 0.2f) * 0.45f, night);
+    glUniform3f(glGetUniformLocation(pid, "uColor"), col.x, col.y, col.z);
+    glBindVertexArray(mParticleVao);
+    glDrawArrays(GL_POINTS, 0, mParticleCount);
+    glBindVertexArray(0);
+    glDisable(GL_BLEND);
+    glDepthMask(GL_TRUE);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
 void Window::renderBloom() {
     if (!mBloomReady)
         return;
@@ -1127,9 +1187,11 @@ void Window::renderHud() {
     glm::vec4 warm(1.0f, 0.95f, 0.8f, 1.0f);
     char buf[80];
 
-    // Firefly counter (top-left).
+    // Firefly counter + world radiance (top-left).
     std::snprintf(buf, sizeof(buf), "FIREFLIES  %d / %d", std::min(mCollected, mTarget), mTarget);
     mHud.text(0.04f, 0.05f, 0.040f, buf, warm);
+    std::snprintf(buf, sizeof(buf), "RADIANCE  %d%%", (int)(mRadiance * 100.0f + 0.5f));
+    mHud.text(0.04f, 0.10f, 0.030f, buf, glm::vec4(0.78f, 0.88f, 1.0f, 0.85f));
 
     // Warmth meter (bottom-left).
     mHud.text(0.04f, 0.860f, 0.026f, "WARMTH", warm);
@@ -1141,11 +1203,11 @@ void Window::renderHud() {
     if (f > 0.001f)
         mHud.rect(0.04f, 0.90f, 0.30f * f, 0.035f, fill);
 
-    // Combo indicator (under the counter) while a chain is active.
+    // Combo indicator while a chain is active.
     if (mCombo >= 2 && mComboTimer > 0.0f) {
         std::snprintf(buf, sizeof(buf), "COMBO x%d", mCombo);
         float a = std::min(1.0f, mComboTimer / 1.5f);
-        mHud.text(0.04f, 0.105f, 0.030f, buf, glm::vec4(1.0f, 0.85f, 0.4f, a));
+        mHud.text(0.04f, 0.15f, 0.030f, buf, glm::vec4(1.0f, 0.85f, 0.4f, a));
     }
 
     // A calm, non-urgent nudge toward the light when the lantern runs low (no alarm).
@@ -1187,6 +1249,7 @@ void Window::render() {
     renderLightingPass();
     renderWater();
     renderGodrays();
+    renderParticles();
     renderBloom();
     renderComposite();
     renderHud();
