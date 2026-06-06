@@ -43,15 +43,15 @@ objectLoader::objectLoader(std::string _inputFile) {
                     c2 = materials[shapes[s].mesh.material_ids[f]].diffuse[1];
                     c3 = materials[shapes[s].mesh.material_ids[f]].diffuse[2];
                     specStrength = materials[shapes[s].mesh.material_ids[f]].specular[0];
-                    float ambientAmount_temp = materials[shapes[s].mesh.material_ids[f]].ambient[0];
-                    // temporary fix: just select the right ambient amount in Blender or
-                    // equivalent
-                    // recommended is ambient 0
-                    ambientAmount = (0.0f > ambientAmount_temp) ? ambientAmount_temp : 0.0f;
+                    // Per-material ambient is dropped; the night scene uses a single global
+                    // moonlight ambient in the lighting pass instead.
+                    ambientAmount = 0.0f;
                     float shiny_temp = materials[shapes[s].mesh.material_ids[f]].shininess;
                     shininess = (1.0f < shiny_temp) ? shiny_temp : 1.0f;
                 }
-                mVertices.push_back(Vertex2(Vertex(glm::vec3(vx, vy, vz), glm::vec3(c1, c2, c3)), glm::vec3(-nx, -ny, -nz),
+                // Store normals with their true orientation. (The old loader negated them
+                // to cancel a matching sign error in the lighting shader; both are now fixed.)
+                mVertices.push_back(Vertex2(Vertex(glm::vec3(vx, vy, vz), glm::vec3(c1, c2, c3)), glm::vec3(nx, ny, nz),
                                             glm::vec3(shininess, specStrength, ambientAmount)));
             }
 

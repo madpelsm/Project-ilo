@@ -1,68 +1,48 @@
 #include "Window.h"
+#include <vector>
+
 int main(int argc, char *argv[]) {
-    Window w(800, 600, "Project Ilo");
+    Window w(1280, 720, "Project Ilo - Firefly Grove");
     w.setvSync(false);
-    w.setSSAA(1.0);
-    w.setMouseSensitivity(0.001f);
-    w.setScrollSensitivity(1.0f);
+    w.setMouseSensitivity(0.0016f);
     w.setFOV(1.4f);
-    // set camera
-    // Position, then target then define the up direction (+Y = Up)
-    float eyeHeight = 2.0f;
-    Camera c1(glm::vec3(0, eyeHeight, 0), glm::vec3(0, 0, -1));
+
+    // Spawn at the southern edge of the grove, looking north into the trees.
+    Camera c1(glm::vec3(0, 2, 18), glm::vec3(0, 0, -1));
     w.setCamera(c1);
-    // set player and init him
-    Player *p1 = new Player("./shapes/miniforest.obj");
-    // this adds to mGameobjects (bad naming, everthing is player)
 
-    w.addNPC(*p1);
-    p1->addInstance(glm::vec3(-8,0,0));
+    // The forest: tile the miniforest patch into a 3x3 grove.
+    Player *forest = new Player("./shapes/miniforest.obj");
+    forest->setGrassWave(1.0f);
+    std::vector<glm::vec3> offs;
+    std::vector<glm::vec4> tints;
+    for (int i = -1; i <= 1; i++) {
+        for (int j = -1; j <= 1; j++) {
+            offs.push_back(glm::vec3(i * 15.0f, 0.0f, j * 13.0f));
+            tints.push_back(glm::vec4(1, 1, 1, 0));
+        }
+    }
+    forest->setInstances(offs, tints);
+    w.addNPC(*forest);
+    w.mForest = forest;
 
-    Player *light = new Player("./shapes/Deer1.obj");
-    w.addNPC(*light);
-    light->setScale(glm::vec3(0.1f, 0.1f, 0.1f));
-    Player *deer = new Player("./shapes/Deer1.obj");
-    w.addNPC(*deer);
-    deer->setTransform(-0.5, 0, 0, 0);
-    deer->setScale(glm::vec3(0.8, 0.8, 0.8));
+    // A couple of deer quietly inhabiting the grove.
+    Player *deer1 = new Player("./shapes/Deer1.obj");
+    deer1->setScale(glm::vec3(0.8f, 0.8f, 0.8f));
+    deer1->setTransform(-3.0f, 0.0f, -4.0f, 0.6f);
+    w.addNPC(*deer1);
 
-    // create lights and add them to the window
-    // the first light created will be bound on the camera's position
-    Light * OmniLight = new Light(glm::vec3(0, 2, 2), glm::vec3(0.2f, 0.2f, 0.2f));
-    w.setLight(*OmniLight);
-    // orange light
-    //Light *OmniLight2= new Light(glm::vec3(0, 2, 2), glm::vec3(1, 0.6, 0.2));
-    //w.setLight(*OmniLight2);
-    //// purple light
-    //Light * OmniLight3 =new Light(glm::vec3(6, 2, 2), glm::vec3(0.6, 0.3, 0.9));
-    //w.setLight(*OmniLight3);
-    //// blue light
-    //Light * OmniLight4= new Light(glm::vec3(-8, 2, 2), glm::vec3(0.3, 0.3, 1));
-    //w.setLight(*OmniLight4);
-    //// green light
-    //Light * OmniLight5 = new Light(glm::vec3(-6, 2, -6), glm::vec3(0.3, 1, 0.3));
-    //w.setLight(*OmniLight5);
-    //// yellow light
-    //Light * OmniLight6 = new Light(glm::vec3(6, 2, -6), glm::vec3(1, 1, 0.3));
-    //w.setLight(*OmniLight6);
-    //// red
-    //Light * OmniLight7 = new Light(glm::vec3(0, 2, -6), glm::vec3(1, .2, 0.2));
-    //w.setLight(*OmniLight7);
-    // dont forget to set Amount_omniLights in the fragShader
+    Player *deer2 = new Player("./shapes/Deer1.obj");
+    deer2->setScale(glm::vec3(0.8f, 0.8f, 0.8f));
+    deer2->setTransform(5.0f, 0.0f, -9.0f, -1.2f);
+    w.addNPC(*deer2);
 
     w.loadGeometries();
     w.initAssets();
     w.run();
-    delete light;
-    delete p1;
-    delete OmniLight;/*
-    delete OmniLight2;
-    delete OmniLight3;
-    delete OmniLight4;
-    delete OmniLight5;
-    delete OmniLight6;
-    delete OmniLight7;*/
-    delete deer;
 
+    delete forest;
+    delete deer1;
+    delete deer2;
     return 0;
 }

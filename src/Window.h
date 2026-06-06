@@ -1,8 +1,8 @@
 #pragma once
 #include "Camera.h"
 #include "GameObject.h"
-#include "Light.h"
 #include "Player.h"
+#include "Render.h"
 #include "Shader.h"
 #include "ShaderProgram.h"
 #include <SDL2/SDL.h>
@@ -11,6 +11,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <iostream>
+#include <vector>
 
 inline void _glCheckError(const char *file, int line) {
     GLenum err;
@@ -21,33 +22,69 @@ inline void _glCheckError(const char *file, int line) {
 
 #define glCheckError() _glCheckError(__FILE__, __LINE__)
 
+enum class GameState { Intro, Playing, Paused, Won, Lost };
+
 class Window {
     int mWidth, mHeight, baseObjects = 0;
     std::string mTitle;
     bool closed = false;
     bool windowInitialised = false;
-    short frames;
-    bool vSync = true,fullscreen = false,windowMaximised = false;
-    float lastTime = SDL_GetTicks(),
-        walkAroundSpeed = 0.09f // camera movement speed
-        ,
-        mMouseSensitivity = 0.01f // camera rotation speed
-        , mSSAA_amount = 2.0f
-        , mSrollSensitivity = 0.5f
-        , mFOV = 1.4f //vertical field of view in radians 
-        , selectedObj = 1, previouslySelected = 0;
+    short frames = 0;
+    bool vSync = true, fullscreen = false, windowMaximised = false;
+    bool mLowSpec = false;
+    float lastTime = 0.0f;
+    float mMouseSensitivity = 0.0016f;
+    float mFOV = 1.4f; // vertical field of view in radians
+
+    // timing
+    double mPrevSeconds = 0.0;
+    float mDt = 0.0f;
+    float mTime = 0.0f; // accumulated game time fed to shaders
+
   public:
     Camera mCamera;
-    ShaderProgram firstPassShader, secondPassShader, thirdPassShader;
     SDL_Window *mSDLwindow = nullptr;
     SDL_GLContext glContext;
     SDL_Event event;
-    Shader vertShader, fragShader, firstPassVertShader, firstPassFragShader, secondPassVertShader, secondPassFragShader,
-        thirdPassVertShader, thirdPassFragShader;
+
+    // shader programs
+    ShaderProgram geometryProg, lightingProg, brightProg, blurProg, compositeProg, hudProg;
+
+    // render targets + helpers
+    ilo::Framebuffer gBuffer, hdrFBO, bloomA, bloomB;
+    ilo::ScreenTri tri;
+    ilo::LightUBO lightUBO;
+    GLuint mBlackTex = 0;
+    bool mBloomReady = false;
+
+    // world
     std::vector<Player *> mGameObjects;
-    std::vector<Light *> mOmniLights;
-    GLuint gbuffer, gPosition, gNormal, gMaterialColor, gMaterialProps, rboDepth, quadVao, ppFBO, ppRBO, screenTex;
-    GLuint attachments[4] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1, GL_COLOR_ATTACHMENT2, GL_COLOR_ATTACHMENT3};
+    Player *mForest = nullptr;
+    Player *mHeart = nullptr;
+
+    // lights packed each frame; [0] is the lantern
+    std::vector<ilo::OmniLightGPU> mLights;
+
+    // game state
+    GameState mState = GameState::Playing;
+    float mFuel = 1.0f;    // 0..1 normalised warmth (real units handled in update)
+    int mCollected = 0;
+    int mTarget = 30;
+
+    // sky / fog / ambient
+    glm::vec3 mAmbient = glm::vec3(0.012f, 0.016f, 0.028f);
+    glm::vec3 mFogColor = glm::vec3(0.02f, 0.035f, 0.06f);
+    float mFogDensity = 0.035f, mFogHeightFalloff = 0.03f, mFogBaseY = -1.0f;
+    glm::vec3 mSkyTop = glm::vec3(0.008f, 0.015f, 0.05f);
+    glm::vec3 mSkyHorizon = glm::vec3(0.03f, 0.05f, 0.09f);
+    glm::vec3 mMoonDir = glm::vec3(0.35f, 0.55f, -0.45f);
+    glm::vec3 mMoonColor = glm::vec3(0.55f, 0.62f, 0.85f);
+    float mMoonSize = 0.07f;
+
+    // composite tuning
+    float mExposure = 1.0f;
+    float mBloomIntensity = 0.55f;
+    float mVignetteMax = 0.55f;
 
     Window();
     Window(int width, int height, std::string title);
@@ -58,30 +95,24 @@ class Window {
     void initAssets();
     void run();
     void update();
-    void upload();
     void render();
-    void renderFirstPass();
-    void renderSecondPass();
-    void renderThirdPass();
+    void renderGeometryPass();
+    void renderLightingPass();
+    void renderBloom();
+    void renderComposite();
     void checkEvents();
     void resize();
-    void destroyShaders();
+    void createFramebuffers();
+    void destroyFramebuffers();
     void loadGeometries();
-    void initQuadMesh();
-    void drawQuad();
-    void prepareForDeferredShading();
-    void preparePostProcessing();
+    void packLights();
+
     void setvSync(bool vSyncStatus);
-    void setSSAA(float _SSAAamount);
     void setMouseSensitivity(float _sensitivity);
     void setScrollSensitivity(float _sensitivity);
+    void setSSAA(float _SSAAamount);
     void setFOV(float _fov);
-    void removeAllPlacedLights();
-    void removeLastPlacedLight();
-    void removeLastPlacedObj();
 
     void setCamera(Camera &c);
     void addNPC(Player &npc);
-    void setPlayer(Player &p);
-    void setLight(Light &light);
 };

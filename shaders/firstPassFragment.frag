@@ -1,23 +1,20 @@
-#version 330
-layout (location = 0) out vec3 gPositionOut;
-layout (location = 1) out vec3 gNormalOut;
-layout (location = 2) out vec3 gMtlColor;
-layout (location = 3) out vec3 gMtlProp;
+#version 330 core
+// Geometry pass: write the G-buffer (4 MRT). Emissive strength is packed in
+// the position target's alpha; emissive colour is reconstructed as albedo*strength.
+in vec3 vWorldPos;
+in vec3 vNormal;
+in vec3 vAlbedo;
+in vec3 vMtlProps;
+in float vEmissive;
 
-in vec3 gPosition;
-in vec3 gNormal;
-in vec3 gMaterialColor;
-in vec3 gMtlProps;
-void main()
-{    
-	//set the out values, set the gluniform1i for the out vec3's to the right 
-	// location (glUniform1i(...))
-    // Store the fragment position vector in the first gbuffer texture
-    gPositionOut = gPosition;
-    // store normal
-    gNormalOut = gNormal;
-    // store mtl color
-	gMtlColor = gMaterialColor;
-    // Store mtl properties 
-	gMtlProp=gMtlProps;
+layout (location = 0) out vec4 oPosition; // rgb = world pos, a = emissive strength
+layout (location = 1) out vec4 oNormal;   // rgb = normal,    a = 1 (reserved)
+layout (location = 2) out vec4 oAlbedo;   // rgb = albedo,    a = 1
+layout (location = 3) out vec4 oMtlProps; // r = shininess/256, g = spec, b = ambient, a = flags
+
+void main() {
+    oPosition = vec4(vWorldPos, vEmissive);
+    oNormal = vec4(normalize(vNormal), 1.0);
+    oAlbedo = vec4(vAlbedo, 1.0);
+    oMtlProps = vec4(vMtlProps.x / 256.0, vMtlProps.y, vMtlProps.z, 0.0);
 }
