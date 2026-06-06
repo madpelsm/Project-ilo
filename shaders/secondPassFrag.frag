@@ -21,7 +21,8 @@ layout(std140) uniform LightBlock {
     int uLightCount;
 };
 
-uniform vec3 uAmbient; // global ambient fill (sky-driven, follows time of day)
+uniform vec3 uAmbient;       // hemisphere ambient from ABOVE (cool sky light)
+uniform vec3 uAmbientGround; // hemisphere ambient from BELOW (warm ground bounce)
 
 uniform vec3 uFogColor;
 uniform float uFogDensity;
@@ -95,7 +96,10 @@ void main() {
     // the direct sun or point lights — so creases and contact points read as shadowed
     // without dimming surfaces a real light actually reaches.
     float ao = texture(uAO, TexCoords).r;
-    vec3 lit = (ambient + uAmbient) * albedo * ao;
+    // Hemisphere sky-light: upward faces catch the cool sky, downward faces a warm
+    // ground bounce — gives shadowed/unlit surfaces realistic directional fill.
+    vec3 hemi = mix(uAmbientGround, uAmbient, clamp(N.y * 0.5 + 0.5, 0.0, 1.0));
+    vec3 lit = (ambient + hemi) * albedo * ao;
 
     // Directional sunlight (no shadows): soft-wrap so shadowed sides never go pure
     // black. ~0 at night, so the cosy point-light glow still owns the dark.

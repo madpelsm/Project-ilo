@@ -2146,7 +2146,11 @@ void Window::renderLightingPass() {
     // eyePos in origin-relative space (matches the G-buffer positions and lights).
     glm::vec3 eyeRel = mCamera.mPosition - mRenderOrigin;
     glUniform3f(glGetUniformLocation(pid, "eyePos"), eyeRel.x, eyeRel.y, eyeRel.z);
-    glUniform3f(glGetUniformLocation(pid, "uAmbient"), mSky.ambient.x, mSky.ambient.y, mSky.ambient.z);
+    // Hemisphere ambient: a cool sky tint from above, a warm dim bounce from below.
+    glm::vec3 ambSky = mSky.ambient * glm::vec3(0.92f, 0.98f, 1.14f);
+    glm::vec3 ambGround = mSky.ambient * glm::vec3(1.12f, 0.96f, 0.72f) * 0.6f;
+    glUniform3f(glGetUniformLocation(pid, "uAmbient"), ambSky.x, ambSky.y, ambSky.z);
+    glUniform3f(glGetUniformLocation(pid, "uAmbientGround"), ambGround.x, ambGround.y, ambGround.z);
     glUniform3f(glGetUniformLocation(pid, "uFogColor"), mSky.fogColor.x, mSky.fogColor.y, mSky.fogColor.z);
     glUniform1f(glGetUniformLocation(pid, "uFogDensity"), mSky.fogDensity);
     glUniform1f(glGetUniformLocation(pid, "uFogHeightFalloff"), mFogHeightFalloff);
