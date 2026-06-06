@@ -73,6 +73,7 @@ void Window::sdlDie() {
     mFireflies.destroy();
     mMushrooms.destroy();
     mBirds.destroy();
+    mBeaconField.destroy();
     for (auto &f : mFields)
         f.destroy();
     mGrass.destroy();
@@ -335,6 +336,59 @@ void Window::initAssets() {
     mFireflies.init(60);
     mMushrooms.init(10);
     mBirds.init(30);
+
+    // Heartwood beacons scattered across the regions, waiting to be woken.
+    const float ang[6] = {0.5f, 1.5f, 2.5f, 3.6f, 4.6f, 5.7f};
+    const float rad[6] = {230.f, 320.f, 400.f, 270.f, 360.f, 300.f};
+    for (int i = 0; i < 6; i++) {
+        float x = std::cos(ang[i]) * rad[i], z = std::sin(ang[i]) * rad[i];
+        mBeacons.push_back({glm::vec3(x, std::max(1.0f, ilo::terrainHeight(x, z)), z), false, 0.0f});
+    }
+    mBeaconField.buildDynamic(proc::makeBeacon(), 8);
+    updateBeacons();
+}
+
+void Window::updateBeacons() {
+    glm::vec3 cam = mCamera.mPosition;
+    // Wake a sleeping beacon you wander up to: a region-wide bloom shockwave, a burst
+    // of warmth, and a permanent jump in the world's radiance.
+    if (mState == GameState::Playing) {
+        for (Beacon &b : mBeacons) {
+            if (b.lit)
+                continue;
+            float dx = b.pos.x - cam.x, dz = b.pos.z - cam.z;
+            if (dx * dx + dz * dz < 64.0f) { // within 8m
+                b.lit = true;
+                b.igniteTime = mTime;
+                mGrovesAwake++;
+                mRadiance = std::min(1.0f, mRadiance + 0.15f);
+                mFuelW = FUEL_MAX;
+                mFlash = std::min(0.4f, mFlash + 0.3f);
+                if (mWakeEvents.size() < 8)
+                    mWakeEvents.push_back(glm::vec4(b.pos.x, b.pos.z, mTime, 0.0f));
+                if (mPulses.size() < 8)
+                    mPulses.push_back({glm::vec3(b.pos.x, b.pos.y + 3.0f, b.pos.z), glm::vec3(1.0f, 0.85f, 0.5f), 0.0f, 0.8f});
+            }
+        }
+    }
+    // Rebuild the (few) beacon instances: dim teal asleep, blazing gold awake.
+    std::vector<FieldInstance> inst;
+    inst.reserve(mBeacons.size());
+    for (const Beacon &b : mBeacons) {
+        FieldInstance fi;
+        fi.pos = b.pos;
+        if (b.lit) {
+            float breathe = 4.0f + 1.0f * std::sin(6.2831f * 0.4f * mTime + b.pos.x);
+            fi.tintEmissive = glm::vec4(1.0f, 0.85f, 0.5f, breathe);
+        } else {
+            // a soft beckoning pulse so a sleeping Heartwood reads as a place to seek
+            float pulse = 0.8f + 0.35f * std::sin(6.2831f * 0.5f * mTime + b.pos.x);
+            fi.tintEmissive = glm::vec4(0.4f, 0.7f, 0.95f, pulse);
+        }
+        fi.xform = glm::vec4(1.5f, b.pos.x * 0.7f, 0.0f, 0.0f);
+        inst.push_back(fi);
+    }
+    mBeaconField.update(inst);
 }
 
 void Window::scatterWorld() {
@@ -744,9 +798,26 @@ void Window::packLights() {
         mLights.push_back(heart);
     }
 
+    // Woken Heartwood beacons: a tall warm light column each.
+    for (const Beacon &b : mBeacons) {
+        if (!b.lit)
+            continue;
+        ilo::OmniLightGPU L;
+        L.posRadius[0] = b.pos.x;
+        L.posRadius[1] = b.pos.y + 4.0f;
+        L.posRadius[2] = b.pos.z;
+        L.posRadius[3] = 32.0f;
+        float in = 3.5f + 0.8f * std::sin(6.2831f * 0.4f * mTime + b.pos.x);
+        L.colorIntensity[0] = 1.0f;
+        L.colorIntensity[1] = 0.8f;
+        L.colorIntensity[2] = 0.5f;
+        L.colorIntensity[3] = in;
+        mLights.push_back(L);
+    }
+
     // Firefly + mushroom lights (nearest to the camera), capped to keep the loop cheap.
-    mFireflies.appendLights(mLights, mTime, mCamera.mPosition, mLowSpec ? 12 : 34);
-    mMushrooms.appendLights(mLights, mTime, mCamera.mPosition, mLowSpec ? 4 : 8);
+    mFireflies.appendLights(mLights, mTime, mCamera.mPosition, mLowSpec ? 12 : 28);
+    mMushrooms.appendLights(mLights, mTime, mCamera.mPosition, mLowSpec ? 4 : 6);
 
     // Floating origin: lights are built in world space; shift them into the same
     // origin-relative space the G-buffer positions are stored in.
@@ -852,6 +923,7 @@ void Window::update() {
     mFuel = mFuelW / FUEL_MAX;
     updateHeart();
     updateDeer();
+    updateBeacons();
     packLights();
     for (unsigned int i = 0; i < mGameObjects.size(); i++) {
         mGameObjects[i]->update();
@@ -918,6 +990,10 @@ void Window::resetGame() {
     mFuelW = FUEL_START;
     mCollected = 0;
     mRadiance = 0.0f;
+    mGrovesAwake = 0;
+    mWakeEvents.clear();
+    for (Beacon &b : mBeacons)
+        b.lit = false;
     mState = GameState::Intro;
     mIntroTimer = 1.5f;
     mCombo = 0;
@@ -952,6 +1028,9 @@ void Window::renderGeometryPass() {
     glUniform3f(glGetUniformLocation(pid, "uOriginOffset"), mRenderOrigin.x, mRenderOrigin.y, mRenderOrigin.z);
     glUniform2f(glGetUniformLocation(pid, "uWind"), 0.45f, 0.30f);
     glUniform3f(glGetUniformLocation(pid, "uPlayerPos"), mCamera.mPosition.x, mCamera.mPosition.y, mCamera.mPosition.z);
+    glUniform1i(glGetUniformLocation(pid, "uWakeCount"), (int)mWakeEvents.size());
+    if (!mWakeEvents.empty())
+        glUniform4fv(glGetUniformLocation(pid, "uWake"), (GLsizei)mWakeEvents.size(), (const float *)mWakeEvents.data());
     glUniform1f(glGetUniformLocation(pid, "time"), mTime);
     // Default per-instance transform for non-field geometry (scale 1, no yaw/wind).
     glVertexAttrib4f(6, 1.0f, 0.0f, 0.0f, 0.0f);
@@ -968,6 +1047,7 @@ void Window::renderGeometryPass() {
     for (auto &f : mFields)
         f.render(pid);
     mGrass.render(pid);
+    mBeaconField.render(pid);
     mBirds.render(pid);
     mMushrooms.render(pid, mTime);
     mFireflies.render(pid, mTime);
@@ -1237,6 +1317,8 @@ void Window::renderHud() {
     mHud.text(0.04f, 0.05f, 0.040f, buf, warm);
     std::snprintf(buf, sizeof(buf), "RADIANCE  %d%%", (int)(mRadiance * 100.0f + 0.5f));
     mHud.text(0.04f, 0.10f, 0.030f, buf, glm::vec4(0.78f, 0.88f, 1.0f, 0.85f));
+    std::snprintf(buf, sizeof(buf), "GROVES  %d / %d", mGrovesAwake, (int)mBeacons.size());
+    mHud.text(0.04f, 0.135f, 0.026f, buf, glm::vec4(1.0f, 0.85f, 0.55f, 0.8f));
 
     // Warmth meter (bottom-left).
     mHud.text(0.04f, 0.860f, 0.026f, "WARMTH", warm);

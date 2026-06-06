@@ -82,6 +82,16 @@ class Window {
     ilo::Terrain mTerrain;
     std::vector<InstancedField> mFields; // scattered living vegetation (trees/flowers/rocks)
     InstancedField mGrass;               // dense grass that follows the camera
+    // Heartwood beacons: sleeping crystal spires you wake to bloom a region.
+    struct Beacon {
+        glm::vec3 pos = glm::vec3(0);
+        bool lit = false;
+        float igniteTime = 0.0f;
+    };
+    std::vector<Beacon> mBeacons;
+    InstancedField mBeaconField;
+    std::vector<glm::vec4> mWakeEvents; // (centreX, centreZ, igniteTime, 0)
+    int mGrovesAwake = 0;
     std::vector<FieldInstance> mGrassBase; // disc-offset pattern (recentred on the camera)
     glm::vec2 mGrassCenter = glm::vec2(1e9f, 1e9f);
     FireflySystem mFireflies;
@@ -186,6 +196,7 @@ class Window {
     void packLights();
     void updateHeart();
     void updateDeer();
+    void updateBeacons();
     void resetGame();
     void addDeer(Player &deer, float x, float z);
 

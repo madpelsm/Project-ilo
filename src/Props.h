@@ -162,6 +162,16 @@ inline Mesh makeGroveProps(unsigned int seed, int treeCount, int rockCount, floa
     return m;
 }
 
+// A Heartwood beacon: a tall crystal spire (base at origin). Per-instance tint/emissive
+// carry its sleeping (dim teal) vs woken (blazing gold) state.
+inline Mesh makeBeacon() {
+    Mesh m;
+    glm::vec3 mtl(48, 0.7f, 0); // glassy/shiny
+    cylinder(m, glm::vec3(0, 0, 0), 0.6f, 0.34f, 6.0f, 6, glm::vec3(0.85f, 0.92f, 1.0f), mtl);
+    cone(m, glm::vec3(0, 6.0f, 0), 0.46f, 2.6f, 6, glm::vec3(0.95f, 0.98f, 1.0f), mtl);
+    return m;
+}
+
 // A tuft of grass blades (base at origin). White-ish so per-instance tint colours it;
 // high wind stiffness when scattered makes a whole meadow ripple.
 inline Mesh makeGrassTuft(Rng &rng) {
