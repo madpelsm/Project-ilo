@@ -156,6 +156,19 @@ void MushroomField::appendLights(std::vector<ilo::OmniLightGPU> &lights, float t
     }
 }
 
+float MushroomField::nearestDist(const glm::vec3 &camPos) const {
+    float best = 1e18f;
+    for (const auto &s : mShrooms) {
+        if (!s.active)
+            continue;
+        float dx = s.pos.x - camPos.x, dy = (s.pos.y + 0.2f) - camPos.y, dz = s.pos.z - camPos.z;
+        float d2 = dx * dx + dy * dy + dz * dz;
+        if (d2 < best)
+            best = d2;
+    }
+    return std::sqrt(best);
+}
+
 void MushroomField::render(int shaderProgramID, float time) {
     std::vector<glm::vec3> offsets;
     std::vector<glm::vec4> tints;

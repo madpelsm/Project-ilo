@@ -25,8 +25,6 @@ const float COLLECT_RADIUS = 1.8f;
 // Fuel / warmth tuning (warmth units), from the design spec.
 const float FUEL_MAX = 100.0f;
 const float FUEL_START = 70.0f;
-const float FUEL_DRAIN = 2.5f;
-const float SPRINT_DRAIN_EXTRA = 1.5f;
 const float FLARE_COST = 8.0f;
 const float FLARE_DURATION = 1.0f;
 const float FLARE_COOLDOWN = 1.5f;
@@ -633,12 +631,9 @@ void Window::packLights() {
         radius *= mult;
         li *= mult;
     }
-    // Low-warmth stutter: the dying lantern flickers and briefly cuts out.
-    if (f < 0.20f) {
-        float flicker = 1.0f + 0.15f * std::sin(6.2831f * 8.0f * mTime);
-        float dropout = (std::fmod(mTime, 2.0f) < 0.1f) ? 0.3f : 1.0f;
-        li *= flicker * dropout;
-    }
+    // Low-warmth: the lantern just breathes a little (gentle, never a harsh cut-out).
+    if (f < 0.25f)
+        li *= 1.0f + 0.10f * std::sin(6.2831f * 1.5f * mTime);
     ilo::OmniLightGPU lantern;
     lantern.posRadius[0] = lp.x;
     lantern.posRadius[1] = lp.y;
@@ -740,14 +735,21 @@ void Window::update() {
             mFuelW = std::min(FUEL_MAX, mFuelW + shroomWarmth);
             mFlash = std::min(0.25f, mFlash + 0.12f);
         }
+
+        // Tranquil warmth: NO fail state. Near light & life (fireflies, mushrooms, the
+        // Heart) the lantern is kept topped up, so roaming the living world is free.
+        // Only the genuine dark wilds dim it gently — and at zero it just shrinks to a
+        // small personal halo, never ends the game. This rewards wandering toward light.
         if (!mFreezeFuel) {
-            float drain = FUEL_DRAIN + (mSprinting ? SPRINT_DRAIN_EXTRA : 0.0f);
-            mFuelW -= drain * mDt;
+            glm::vec3 cam = mCamera.mPosition;
+            float lifeD = std::min(mFireflies.nearestDist(cam), mMushrooms.nearestDist(cam));
+            lifeD = std::min(lifeD, glm::length(cam - mHeartPos));
+            if (lifeD < 16.0f)
+                mFuelW = std::min(FUEL_MAX, mFuelW + 10.0f * mDt); // bask in radiance
+            else
+                mFuelW = std::max(0.0f, mFuelW - 1.0f * mDt); // gentle dim in the dark
         }
-        if (!mFreezeFuel && mFuelW <= 0.0f) {
-            mFuelW = 0.0f;
-            mState = GameState::Lost;
-        }
+
         if (mCollected >= mTarget)
             mState = GameState::Won;
     }
@@ -1146,8 +1148,9 @@ void Window::renderHud() {
         mHud.text(0.04f, 0.105f, 0.030f, buf, glm::vec4(1.0f, 0.85f, 0.4f, a));
     }
 
-    if (mState == GameState::Playing && f <= 0.20f && ((int)(mTime * 2.0f) % 2 == 0))
-        mHud.textCentered(0.5f, 0.12f, 0.035f, "FIND A FIREFLY", glm::vec4(1.0f, 0.25f, 0.2f, 1.0f));
+    // A calm, non-urgent nudge toward the light when the lantern runs low (no alarm).
+    if (mState == GameState::Playing && f <= 0.18f)
+        mHud.textCentered(0.5f, 0.13f, 0.030f, "WANDER TOWARD THE LIGHT", glm::vec4(0.75f, 0.82f, 1.0f, 0.7f));
 
     if (mState == GameState::Intro) {
         int n = (int)std::ceil(mIntroTimer);

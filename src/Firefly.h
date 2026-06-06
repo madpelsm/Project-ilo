@@ -44,6 +44,7 @@ class FireflySystem {
     void render(int shaderProgramID, float time);
 
     int aliveCount() const;
+    float nearestDist(const glm::vec3 &camPos) const; // to the nearest live mote
 
   private:
     GLuint mVao = 0, mVbo = 0, mIbo = 0, mInstVbo = 0, mTintVbo = 0;

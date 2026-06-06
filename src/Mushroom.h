@@ -25,6 +25,7 @@ class MushroomField {
     float update(float dt, float time, const glm::vec3 &camPos, float harvestRadius);
     void appendLights(std::vector<ilo::OmniLightGPU> &lights, float time, const glm::vec3 &camPos, int maxLights);
     void render(int shaderProgramID, float time);
+    float nearestDist(const glm::vec3 &camPos) const; // to the nearest glowing mushroom
 
   private:
     GLuint mVao = 0, mVbo = 0, mIbo = 0, mInstVbo = 0, mTintVbo = 0;

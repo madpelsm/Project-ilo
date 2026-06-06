@@ -288,3 +288,16 @@ int FireflySystem::aliveCount() const {
             n++;
     return n;
 }
+
+float FireflySystem::nearestDist(const glm::vec3 &camPos) const {
+    float best = 1e18f;
+    for (const auto &f : mFlies) {
+        if (!f.active)
+            continue;
+        float dx = f.x - camPos.x, dz = f.z - camPos.z, dy = f.baseY - camPos.y;
+        float d2 = dx * dx + dy * dy + dz * dz;
+        if (d2 < best)
+            best = d2;
+    }
+    return std::sqrt(best);
+}
