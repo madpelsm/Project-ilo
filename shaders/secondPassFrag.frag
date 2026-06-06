@@ -11,7 +11,6 @@ uniform sampler2D gAlbedo;
 uniform sampler2D gMtlProps;
 
 uniform vec3 eyePos;
-uniform mat4 invViewProj;
 
 struct OmniLight {
     vec4 posRadius;      // xyz pos, w radius
@@ -22,36 +21,16 @@ layout(std140) uniform LightBlock {
     int uLightCount;
 };
 
-uniform vec3 uAmbient; // global cool moonlight fill so the forest isn't a black void
+uniform vec3 uAmbient; // global ambient fill (sky-driven, follows time of day)
 
 uniform vec3 uFogColor;
 uniform float uFogDensity;
 uniform float uFogHeightFalloff;
 uniform float uFogBaseY;
 
-uniform vec3 uSkyTop;
-uniform vec3 uSkyHorizon;
-uniform vec3 uMoonDir;
-uniform vec3 uMoonColor;
-uniform float uMoonSize;
-uniform float uStarFade; // 1 at night, 0 at full dawn
-uniform float uTime;
-
-float hash31(vec3 p) {
-    p = fract(p * 0.3183099 + 0.1);
-    p *= 17.0;
-    return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
-}
-
-vec3 starfield(vec3 ray) {
-    if (ray.y < 0.02)
-        return vec3(0.0);
-    vec3 cell = floor(ray * 130.0);
-    float h = hash31(cell);
-    float s = smoothstep(0.992, 1.0, h);                  // sparse points
-    float tw = 0.55 + 0.45 * sin(uTime * 2.5 + h * 50.0); // twinkle
-    return vec3(0.9, 0.95, 1.0) * s * tw * smoothstep(0.0, 0.18, ray.y);
-}
+uniform sampler2D uSkyTex;  // half-res procedural sky (background + atmosphere)
+uniform vec3 uSunDir;       // toward the sun
+uniform vec3 uSunlight;     // directional radiance (colour * intensity), ~0 at night
 
 vec3 applyFog(vec3 col, vec3 P) {
     float dist = length(P - eyePos);
@@ -61,25 +40,10 @@ vec3 applyFog(vec3 col, vec3 P) {
     return mix(uFogColor, col, fog); // fog==1 -> unfogged
 }
 
-vec3 skyColor(vec3 ray) {
-    vec3 sky = mix(uSkyHorizon, uSkyTop, clamp(ray.y, 0.0, 1.0));
-    // soft moon disc
-    float m = smoothstep(uMoonSize, uMoonSize * 0.7, distance(ray, normalize(uMoonDir)));
-    sky += uMoonColor * m;
-    // faint glow halo around the moon
-    sky += uMoonColor * 0.15 * pow(max(dot(ray, normalize(uMoonDir)), 0.0), 8.0);
-    // stars (fade out as dawn breaks), dimmed near the moon's glow
-    sky += starfield(ray) * uStarFade;
-    return sky;
-}
-
 void main() {
     vec3 N = texture(gNormal, TexCoords).rgb;
-    if (dot(N, N) < 0.25) { // background: no geometry here -> draw sky
-        vec3 ndc = vec3(TexCoords * 2.0 - 1.0, 1.0);
-        vec4 wp = invViewProj * vec4(ndc, 1.0);
-        vec3 ray = normalize(wp.xyz / wp.w - eyePos);
-        FragColor = skyColor(ray);
+    if (dot(N, N) < 0.25) { // background: no geometry here -> the procedural sky
+        FragColor = texture(uSkyTex, TexCoords).rgb;
         return;
     }
     N = normalize(N);
@@ -95,6 +59,17 @@ void main() {
 
     vec3 V = normalize(eyePos - P);
     vec3 lit = (ambient + uAmbient) * albedo;
+
+    // Directional sunlight (no shadows): soft-wrap so shadowed sides never go pure
+    // black. ~0 at night, so the cosy point-light glow still owns the dark.
+    {
+        vec3 Ls = normalize(uSunDir);
+        float ndl = dot(N, Ls);
+        float wrap = ndl * 0.85 + 0.15;
+        vec3 Hs = normalize(Ls + V);
+        float sd = smoothstep(0.0, 0.05, ndl) * pow(max(dot(N, Hs), 0.0), shininess) * specStrength;
+        lit += uSunlight * (max(wrap, 0.0) * albedo + sd);
+    }
 
     for (int i = 0; i < uLightCount; ++i) {
         vec3 toL = lights[i].posRadius.xyz - P;

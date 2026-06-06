@@ -84,6 +84,7 @@ void Window::sdlDie() {
     geometryProg.deleteProgram();
     brightProg.deleteProgram();
     blurProg.deleteProgram();
+    skyProg.deleteProgram();
     if (glContext) {
         SDL_GL_DeleteContext(glContext);
         glContext = nullptr;
@@ -153,6 +154,7 @@ void Window::initGL() {
     buildProgram(brightProg, "./shaders/fullscreen.vert", "./shaders/bloomBright.frag");
     buildProgram(blurProg, "./shaders/fullscreen.vert", "./shaders/bloomBlur.frag");
     buildProgram(compositeProg, "./shaders/fullscreen.vert", "./shaders/thirdPassFrag.frag");
+    buildProgram(skyProg, "./shaders/fullscreen.vert", "./shaders/sky.frag");
 
     // Static sampler bindings.
     lightingProg.useProgram();
@@ -161,6 +163,7 @@ void Window::initGL() {
     glUniform1i(glGetUniformLocation(lp, "gNormal"), 1);
     glUniform1i(glGetUniformLocation(lp, "gAlbedo"), 2);
     glUniform1i(glGetUniformLocation(lp, "gMtlProps"), 3);
+    glUniform1i(glGetUniformLocation(lp, "uSkyTex"), 4);
     glUniformBlockBinding(lp, glGetUniformBlockIndex(lp, "LightBlock"), 0);
 
     brightProg.useProgram();
@@ -220,6 +223,14 @@ void Window::createFramebuffers() {
     bloomB.complete("bloomB");
     mBloomReady = true;
 
+    // Half-resolution procedural sky (sampled by the lighting + water passes).
+    int sw = std::max(1, (mWidth + 1) / 2);
+    int sh = std::max(1, (mHeight + 1) / 2);
+    skyFBO.create(sw, sh);
+    skyFBO.addColor(GL_RGBA16F, GL_RGBA, GL_FLOAT, GL_LINEAR);
+    skyFBO.setDrawBuffers();
+    skyFBO.complete("skyFBO");
+
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
@@ -228,6 +239,7 @@ void Window::destroyFramebuffers() {
     hdrFBO.destroy();
     bloomA.destroy();
     bloomB.destroy();
+    skyFBO.destroy();
     mBloomReady = false;
 }
 
@@ -298,6 +310,10 @@ void Window::run() {
     }
     if (const char *cEnv = std::getenv("ILO_COLLECTED"))
         mCollected = std::atoi(cEnv); // testing knob: preview Heart progress / win state
+    if (const char *dEnv = std::getenv("ILO_DAYPHASE")) {
+        mDayPhase = (float)std::atof(dEnv); // testing knob: hold a fixed time of day
+        mFreezeDay = true;
+    }
     if (shotPath && camEnv) {
         float x, y, z, yaw, pitch;
         if (std::sscanf(camEnv, "%f,%f,%f,%f,%f", &x, &y, &z, &yaw, &pitch) == 5) {
@@ -547,12 +563,15 @@ void Window::update() {
         if (mComboTimer <= 0.0f)
             mCombo = 0;
     }
-    // Dawn rises gently with progress and breaks fully on a win.
-    {
-        float progress = std::min(1.0f, mCollected / (float)mTarget);
-        float dawnTarget = (mState == GameState::Won) ? 1.0f : progress * 0.30f;
-        mDawn += (dawnTarget - mDawn) * std::min(1.0f, mDt * 0.6f);
+    // Advance the day-night cycle; on a win, ease toward sunrise so dawn breaks.
+    if (!mFreezeDay) {
+        mDayPhase += mDt / mDayLength;
+        if (mState == GameState::Won)
+            mDayPhase += (0.23f - mDayPhase) * std::min(1.0f, mDt * 0.25f);
+        mDayPhase -= std::floor(mDayPhase); // wrap to [0,1)
     }
+    float radiance01 = std::min(1.0f, mCollected / (float)mTarget);
+    mSky.update(mDayPhase, radiance01);
     for (size_t i = 0; i < mPulses.size();) {
         mPulses[i].age += mDt;
         if (mPulses[i].age >= mPulses[i].life)
@@ -675,6 +694,42 @@ void Window::renderGeometryPass() {
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
+void Window::renderSky() {
+    glViewport(0, 0, skyFBO.w, skyFBO.h);
+    skyFBO.bind();
+    glDisable(GL_DEPTH_TEST);
+    glDepthMask(GL_FALSE);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_BLEND);
+
+    skyProg.useProgram();
+    GLuint pid = skyProg.getProgramID();
+    glm::mat4 persp = glm::perspective(mFOV, mWidth / (float)mHeight, 0.4f, 200.0f);
+    glm::mat4 invVP = glm::inverse(persp * mCamera.mView);
+    glUniformMatrix4fv(glGetUniformLocation(pid, "invViewProj"), 1, GL_FALSE, glm::value_ptr(invVP));
+    glUniform3f(glGetUniformLocation(pid, "eyePos"), mCamera.mPosition.x, mCamera.mPosition.y, mCamera.mPosition.z);
+    glUniform1f(glGetUniformLocation(pid, "uTime"), mTime);
+    auto v3 = [&](const char *n, glm::vec3 v) { glUniform3f(glGetUniformLocation(pid, n), v.x, v.y, v.z); };
+    auto f1 = [&](const char *n, float v) { glUniform1f(glGetUniformLocation(pid, n), v); };
+    v3("uSkyTop", mSky.skyTop);
+    v3("uSkyHorizon", mSky.skyHorizon);
+    v3("uHorizonGlow", mSky.horizonGlow);
+    v3("uSunDir", mSky.sunDir);
+    v3("uMoonDir", mSky.moonDir);
+    v3("uSunDiscColor", mSky.sunDiscColor);
+    v3("uMoonColor", mSky.moonColor);
+    v3("uSunlight", mSky.sunlight);
+    f1("uSunDiscSize", mSky.sunDiscSize);
+    f1("uMoonSize", mSky.moonSize);
+    f1("uStarFade", mSky.starFade);
+    f1("uAuroraStrength", mSky.auroraStrength);
+    f1("uGalaxyStrength", mSky.galaxyStrength);
+    f1("uCloudCoverage", mSky.cloudCoverage);
+    glUniform2f(glGetUniformLocation(pid, "uCloudWind"), 0.006f, 0.004f);
+    tri.draw();
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
 void Window::renderLightingPass() {
     glViewport(0, 0, mWidth, mHeight);
     hdrFBO.bind();
@@ -694,35 +749,21 @@ void Window::renderLightingPass() {
     glBindTexture(GL_TEXTURE_2D, gBuffer.color(2));
     glActiveTexture(GL_TEXTURE3);
     glBindTexture(GL_TEXTURE_2D, gBuffer.color(3));
+    glActiveTexture(GL_TEXTURE4);
+    glBindTexture(GL_TEXTURE_2D, skyFBO.color(0));
 
-    glm::mat4 persp = glm::perspective(mFOV, mWidth / (float)mHeight, 0.1f, 200.0f);
-    glm::mat4 invVP = glm::inverse(persp * mCamera.mView);
-    glUniformMatrix4fv(glGetUniformLocation(pid, "invViewProj"), 1, GL_FALSE, glm::value_ptr(invVP));
     glUniform3f(glGetUniformLocation(pid, "eyePos"), mCamera.mPosition.x, mCamera.mPosition.y, mCamera.mPosition.z);
-
-    // Blend the night palette toward a warm dawn as the grove awakens.
-    float d = mDawn;
-    glm::vec3 ambient = glm::mix(mAmbient, glm::vec3(0.13f, 0.13f, 0.16f), d);
-    glm::vec3 fog = glm::mix(mFogColor, glm::vec3(0.42f, 0.34f, 0.40f), d);
-    glm::vec3 skyTop = glm::mix(mSkyTop, glm::vec3(0.16f, 0.20f, 0.34f), d);
-    glm::vec3 skyHorizon = glm::mix(mSkyHorizon, glm::vec3(0.95f, 0.55f, 0.38f), d);
-    glm::vec3 moon = mMoonColor * (1.0f - 0.7f * d);
-
-    glUniform3f(glGetUniformLocation(pid, "uAmbient"), ambient.x, ambient.y, ambient.z);
-    glUniform3f(glGetUniformLocation(pid, "uFogColor"), fog.x, fog.y, fog.z);
-    glUniform1f(glGetUniformLocation(pid, "uFogDensity"), mFogDensity);
+    glUniform3f(glGetUniformLocation(pid, "uAmbient"), mSky.ambient.x, mSky.ambient.y, mSky.ambient.z);
+    glUniform3f(glGetUniformLocation(pid, "uFogColor"), mSky.fogColor.x, mSky.fogColor.y, mSky.fogColor.z);
+    glUniform1f(glGetUniformLocation(pid, "uFogDensity"), mSky.fogDensity);
     glUniform1f(glGetUniformLocation(pid, "uFogHeightFalloff"), mFogHeightFalloff);
     glUniform1f(glGetUniformLocation(pid, "uFogBaseY"), mFogBaseY);
-    glUniform3f(glGetUniformLocation(pid, "uSkyTop"), skyTop.x, skyTop.y, skyTop.z);
-    glUniform3f(glGetUniformLocation(pid, "uSkyHorizon"), skyHorizon.x, skyHorizon.y, skyHorizon.z);
-    glUniform3f(glGetUniformLocation(pid, "uMoonDir"), mMoonDir.x, mMoonDir.y, mMoonDir.z);
-    glUniform3f(glGetUniformLocation(pid, "uMoonColor"), moon.x, moon.y, moon.z);
-    glUniform1f(glGetUniformLocation(pid, "uMoonSize"), mMoonSize);
-    glUniform1f(glGetUniformLocation(pid, "uStarFade"), 1.0f - d);
-    glUniform1f(glGetUniformLocation(pid, "uTime"), mTime);
+    glUniform3f(glGetUniformLocation(pid, "uSunDir"), mSky.sunDir.x, mSky.sunDir.y, mSky.sunDir.z);
+    glUniform3f(glGetUniformLocation(pid, "uSunlight"), mSky.sunlight.x, mSky.sunlight.y, mSky.sunlight.z);
 
     lightUBO.bindBase(0);
     tri.draw();
+    glActiveTexture(GL_TEXTURE0);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
@@ -847,6 +888,7 @@ void Window::renderHud() {
 
 void Window::render() {
     renderGeometryPass();
+    renderSky();
     renderLightingPass();
     renderBloom();
     renderComposite();

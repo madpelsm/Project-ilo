@@ -6,6 +6,7 @@
 #include "Mushroom.h"
 #include "Player.h"
 #include "Render.h"
+#include "Sky.h"
 #include "Shader.h"
 #include "ShaderProgram.h"
 #include <SDL2/SDL.h>
@@ -57,10 +58,10 @@ class Window {
     SDL_Event event;
 
     // shader programs (HUD owns its own program)
-    ShaderProgram geometryProg, lightingProg, brightProg, blurProg, compositeProg;
+    ShaderProgram geometryProg, lightingProg, brightProg, blurProg, compositeProg, skyProg;
 
     // render targets + helpers
-    ilo::Framebuffer gBuffer, hdrFBO, bloomA, bloomB;
+    ilo::Framebuffer gBuffer, hdrFBO, bloomA, bloomB, skyFBO;
     ilo::ScreenTri tri;
     ilo::LightUBO lightUBO;
     GLuint mBlackTex = 0;
@@ -81,6 +82,9 @@ class Window {
 
     // game state
     GameState mState = GameState::Intro;
+    Sky mSky;
+    float mDayPhase = 0.0f;     // 0 midnight, 0.25 sunrise, 0.5 noon, 0.75 sunset
+    float mDayLength = 1080.0f; // seconds for a full day-night cycle (~18 min)
     float mFuel = 1.0f;    // 0..1 normalised warmth (derived from mFuelW each frame)
     float mFuelW = 70.0f;  // warmth in fuel units
     int mCollected = 0;
@@ -88,6 +92,7 @@ class Window {
     float mIntroTimer = 1.5f;
     bool mSprinting = false;
     bool mFreezeFuel = false; // screenshot/testing: hold fuel constant
+    bool mFreezeDay = false;  // screenshot/testing: hold the day phase constant
     int mCombo = 0;           // consecutive firefly catches
     float mComboTimer = 0.0f; // time left to extend the combo
     float mDawn = 0.0f;       // 0 = night, 1 = full dawn (rises with progress / on win)
@@ -143,6 +148,7 @@ class Window {
     void stepFrameWeb(); // one frame, driven by the browser main loop
     void update();
     void render();
+    void renderSky();
     void renderGeometryPass();
     void renderLightingPass();
     void renderBloom();
