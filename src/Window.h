@@ -59,7 +59,8 @@ class Window {
     SDL_Event event;
 
     // shader programs (HUD owns its own program)
-    ShaderProgram geometryProg, lightingProg, brightProg, blurProg, compositeProg, skyProg;
+    ShaderProgram geometryProg, lightingProg, brightProg, blurProg, compositeProg, skyProg, waterProg;
+    GLuint mWaterVao = 0, mWaterVbo = 0;
 
     // render targets + helpers
     ilo::Framebuffer gBuffer, hdrFBO, bloomA, bloomB, skyFBO;
@@ -159,6 +160,7 @@ class Window {
     void renderSky();
     void renderGeometryPass();
     void renderLightingPass();
+    void renderWater();
     void renderBloom();
     void renderComposite();
     void renderHud();

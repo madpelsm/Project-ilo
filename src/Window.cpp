@@ -86,6 +86,10 @@ void Window::sdlDie() {
     brightProg.deleteProgram();
     blurProg.deleteProgram();
     skyProg.deleteProgram();
+    waterProg.deleteProgram();
+    if (mWaterVao)
+        glDeleteVertexArrays(1, &mWaterVao);
+    glDeleteBuffers(1, &mWaterVbo);
     if (glContext) {
         SDL_GL_DeleteContext(glContext);
         glContext = nullptr;
@@ -156,6 +160,7 @@ void Window::initGL() {
     buildProgram(blurProg, "./shaders/fullscreen.vert", "./shaders/bloomBlur.frag");
     buildProgram(compositeProg, "./shaders/fullscreen.vert", "./shaders/thirdPassFrag.frag");
     buildProgram(skyProg, "./shaders/fullscreen.vert", "./shaders/sky.frag");
+    buildProgram(waterProg, "./shaders/water.vert", "./shaders/water.frag");
 
     // Static sampler bindings.
     lightingProg.useProgram();
@@ -174,6 +179,22 @@ void Window::initGL() {
     compositeProg.useProgram();
     glUniform1i(glGetUniformLocation(compositeProg.getProgramID(), "uScene"), 0);
     glUniform1i(glGetUniformLocation(compositeProg.getProgramID(), "uBloom"), 1);
+    waterProg.useProgram();
+    glUniform1i(glGetUniformLocation(waterProg.getProgramID(), "gPosition"), 0);
+
+    // The Mere: a flat water plane (y=0) over the central basin.
+    {
+        const float E = 240.0f;
+        float quad[] = {-E, 0, -E, E, 0, -E, E, 0, E, -E, 0, -E, E, 0, E, -E, 0, E};
+        glGenVertexArrays(1, &mWaterVao);
+        glBindVertexArray(mWaterVao);
+        glGenBuffers(1, &mWaterVbo);
+        glBindBuffer(GL_ARRAY_BUFFER, mWaterVbo);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_STATIC_DRAW);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), 0);
+        glBindVertexArray(0);
+    }
 
     tri.init();
     lightUBO.init();
@@ -204,9 +225,11 @@ void Window::createFramebuffers() {
     gBuffer.setDrawBuffers();
     gBuffer.complete("gBuffer");
 
-    // HDR lighting target (linear, filtered for bloom sampling).
+    // HDR lighting target (linear, filtered for bloom sampling). Has its own depth so
+    // the scene depth can be blitted in for the water pass to test against.
     hdrFBO.create(mWidth, mHeight);
     hdrFBO.addColor(GL_RGBA16F, GL_RGBA, GL_FLOAT, GL_LINEAR);
+    hdrFBO.addDepth(GL_DEPTH_COMPONENT24);
     hdrFBO.setDrawBuffers();
     hdrFBO.complete("hdrFBO");
 
@@ -795,6 +818,47 @@ void Window::renderLightingPass() {
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
+void Window::renderWater() {
+    // Blit the scene depth into the HDR buffer so the water plane is occluded by land.
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, gBuffer.fbo);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, hdrFBO.fbo);
+    glBlitFramebuffer(0, 0, mWidth, mHeight, 0, 0, mWidth, mHeight, GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+
+    hdrFBO.bind();
+    glViewport(0, 0, mWidth, mHeight);
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LESS);
+    glDepthMask(GL_FALSE);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_BLEND);
+
+    waterProg.useProgram();
+    GLuint pid = waterProg.getProgramID();
+    glm::mat4 persp = projection();
+    glUniformMatrix4fv(glGetUniformLocation(pid, "persp"), 1, GL_FALSE, glm::value_ptr(persp));
+    glUniformMatrix4fv(glGetUniformLocation(pid, "view"), 1, GL_FALSE, glm::value_ptr(mCamera.mView));
+    glUniform3f(glGetUniformLocation(pid, "eyePos"), mCamera.mPosition.x, mCamera.mPosition.y, mCamera.mPosition.z);
+    glUniform2f(glGetUniformLocation(pid, "uScreen"), (float)mWidth, (float)mHeight);
+    glUniform1f(glGetUniformLocation(pid, "uTime"), mTime);
+    auto v3 = [&](const char *n, glm::vec3 v) { glUniform3f(glGetUniformLocation(pid, n), v.x, v.y, v.z); };
+    v3("uSkyTop", mSky.skyTop);
+    v3("uSkyHorizon", mSky.skyHorizon);
+    v3("uHorizonGlow", mSky.horizonGlow);
+    v3("uSunDir", mSky.sunDir);
+    v3("uSunColor", mSky.sunDiscColor);
+    v3("uMoonDir", mSky.moonDir);
+    v3("uMoonColor", mSky.moonColor);
+    v3("uWaterColor", glm::vec3(0.015f, 0.055f, 0.075f));
+    glUniform1f(glGetUniformLocation(pid, "uStarFade"), mSky.starFade);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, gBuffer.color(0));
+    glBindVertexArray(mWaterVao);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+    glBindVertexArray(0);
+    glDepthMask(GL_TRUE);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
 void Window::renderBloom() {
     if (!mBloomReady)
         return;
@@ -918,6 +982,7 @@ void Window::render() {
     renderGeometryPass();
     renderSky();
     renderLightingPass();
+    renderWater();
     renderBloom();
     renderComposite();
     renderHud();
