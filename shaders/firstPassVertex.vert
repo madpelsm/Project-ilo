@@ -11,6 +11,7 @@ uniform mat4 persp;
 uniform mat4 model;
 uniform mat4 view;
 uniform mat3 normalMatrix; // transpose(inverse(mat3(model))), computed once on the CPU
+uniform vec3 uOriginOffset; // floating-origin: G-buffer stores positions relative to this
 uniform float time;
 uniform float grassWave;   // 1.0 for the forest (animate low verts), 0.0 otherwise
 
@@ -30,7 +31,9 @@ void main() {
     vec4 worldPos = model * vec4(vertPos + instanceOffset, 1.0);
     gl_Position = persp * view * worldPos;
 
-    vWorldPos = worldPos.xyz;
+    // Store position relative to a nearby snapped origin so the fp16 G-buffer stays
+    // precise no matter how far the player roams from the world centre.
+    vWorldPos = worldPos.xyz - uOriginOffset;
     vNormal = normalMatrix * inNormal;
     vAlbedo = inColor * instanceTintEmissive.rgb;
     vMtlProps = inMtlProps;

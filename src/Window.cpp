@@ -17,7 +17,7 @@ namespace {
 const float WALK_SPEED = 4.0f;
 const float SPRINT_SPEED = 6.5f;
 const float FLY_VERT_SPEED = 3.0f;
-const float HARD_BOUND = 24.0f; // clamp camera to the play area
+const float WORLD_BOUND = 880.0f; // soft clamp near the caldera rim
 const float DT_CLAMP = 0.05f;
 const float COLLECT_RADIUS = 1.8f;
 
@@ -432,9 +432,9 @@ void Window::checkEvents() {
         }
     }
 
-    // keep the camera inside the grove
-    mCamera.mPosition.x = std::max(-HARD_BOUND, std::min(HARD_BOUND, mCamera.mPosition.x));
-    mCamera.mPosition.z = std::max(-HARD_BOUND, std::min(HARD_BOUND, mCamera.mPosition.z));
+    // Soft world bound far out at the rim (the open world fills the space within).
+    mCamera.mPosition.x = std::max(-WORLD_BOUND, std::min(WORLD_BOUND, mCamera.mPosition.x));
+    mCamera.mPosition.z = std::max(-WORLD_BOUND, std::min(WORLD_BOUND, mCamera.mPosition.z));
     mCamera.update();
 }
 
@@ -509,10 +509,22 @@ void Window::packLights() {
     mFireflies.appendLights(mLights, mTime, mCamera.mPosition, mLowSpec ? 12 : 34);
     mMushrooms.appendLights(mLights, mTime, mCamera.mPosition, mLowSpec ? 4 : 8);
 
+    // Floating origin: lights are built in world space; shift them into the same
+    // origin-relative space the G-buffer positions are stored in.
+    for (auto &L : mLights) {
+        L.posRadius[0] -= mRenderOrigin.x;
+        L.posRadius[1] -= mRenderOrigin.y;
+        L.posRadius[2] -= mRenderOrigin.z;
+    }
+
     lightUBO.upload(mLights.data(), (int)mLights.size());
 }
 
 void Window::update() {
+    // Floating origin: snap to a 128m grid near the camera (only the XZ plane).
+    mRenderOrigin = glm::vec3(std::round(mCamera.mPosition.x / 128.0f) * 128.0f, 0.0f,
+                              std::round(mCamera.mPosition.z / 128.0f) * 128.0f);
+
     if (mState == GameState::Intro) {
         mIntroTimer -= mDt;
         if (mIntroTimer <= 0.0f)
@@ -676,9 +688,10 @@ void Window::renderGeometryPass() {
 
     geometryProg.useProgram();
     GLuint pid = geometryProg.getProgramID();
-    glm::mat4 persp = glm::perspective(mFOV, mWidth / (float)mHeight, 0.1f, 200.0f);
+    glm::mat4 persp = projection();
     glUniformMatrix4fv(glGetUniformLocation(pid, "persp"), 1, GL_FALSE, glm::value_ptr(persp));
     glUniformMatrix4fv(glGetUniformLocation(pid, "view"), 1, GL_FALSE, glm::value_ptr(mCamera.mView));
+    glUniform3f(glGetUniformLocation(pid, "uOriginOffset"), mRenderOrigin.x, mRenderOrigin.y, mRenderOrigin.z);
     glUniform1f(glGetUniformLocation(pid, "time"), mTime);
 
     // Closed OBJ meshes (forest, deer, Heart) render with back-face culling.
@@ -704,8 +717,7 @@ void Window::renderSky() {
 
     skyProg.useProgram();
     GLuint pid = skyProg.getProgramID();
-    glm::mat4 persp = glm::perspective(mFOV, mWidth / (float)mHeight, 0.4f, 200.0f);
-    glm::mat4 invVP = glm::inverse(persp * mCamera.mView);
+    glm::mat4 invVP = glm::inverse(projection() * mCamera.mView);
     glUniformMatrix4fv(glGetUniformLocation(pid, "invViewProj"), 1, GL_FALSE, glm::value_ptr(invVP));
     glUniform3f(glGetUniformLocation(pid, "eyePos"), mCamera.mPosition.x, mCamera.mPosition.y, mCamera.mPosition.z);
     glUniform1f(glGetUniformLocation(pid, "uTime"), mTime);
@@ -752,7 +764,9 @@ void Window::renderLightingPass() {
     glActiveTexture(GL_TEXTURE4);
     glBindTexture(GL_TEXTURE_2D, skyFBO.color(0));
 
-    glUniform3f(glGetUniformLocation(pid, "eyePos"), mCamera.mPosition.x, mCamera.mPosition.y, mCamera.mPosition.z);
+    // eyePos in origin-relative space (matches the G-buffer positions and lights).
+    glm::vec3 eyeRel = mCamera.mPosition - mRenderOrigin;
+    glUniform3f(glGetUniformLocation(pid, "eyePos"), eyeRel.x, eyeRel.y, eyeRel.z);
     glUniform3f(glGetUniformLocation(pid, "uAmbient"), mSky.ambient.x, mSky.ambient.y, mSky.ambient.z);
     glUniform3f(glGetUniformLocation(pid, "uFogColor"), mSky.fogColor.x, mSky.fogColor.y, mSky.fogColor.z);
     glUniform1f(glGetUniformLocation(pid, "uFogDensity"), mSky.fogDensity);

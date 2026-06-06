@@ -83,6 +83,7 @@ class Window {
     // game state
     GameState mState = GameState::Intro;
     Sky mSky;
+    glm::vec3 mRenderOrigin = glm::vec3(0); // floating-origin (snapped to a 128m grid)
     float mDayPhase = 0.0f;     // 0 midnight, 0.25 sunrise, 0.5 noon, 0.75 sunset
     float mDayLength = 1080.0f; // seconds for a full day-night cycle (~18 min)
     float mFuel = 1.0f;    // 0..1 normalised warmth (derived from mFuelW each frame)
@@ -147,6 +148,9 @@ class Window {
     void run();
     void stepFrameWeb(); // one frame, driven by the browser main loop
     void update();
+    glm::mat4 projection() const {
+        return glm::perspective(mFOV, mWidth / (float)(mHeight > 0 ? mHeight : 1), 0.4f, 700.0f);
+    }
     void render();
     void renderSky();
     void renderGeometryPass();

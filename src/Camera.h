@@ -15,7 +15,7 @@ class Camera {
     float mYaw = 0.0f;   // radians; 0 looks down -Z
     float mPitch = 0.0f; // radians; clamped to +/- mPitchLimit
     float mPitchLimit = 1.50f;
-    float mMinY = 0.5f, mMaxY = 6.0f;
+    float mMinY = 0.5f, mMaxY = 120.0f;
 
     Camera();
     Camera(glm::vec3 position, glm::vec3 direction);
