@@ -388,6 +388,46 @@ void Window::scatterWorld() {
         mFields.back().build(tree, inst);
     }
 
+    // Broadleaf trees + white birches, for a varied woodland (not cloned conifers).
+    {
+        proc::Rng br(202u);
+        proc::Mesh leaf;
+        proc::broadleaf(leaf, glm::vec3(0), br);
+        std::vector<FieldInstance> inst;
+        for (int i = 0; i < 1600 && (int)inst.size() < 320; i++) {
+            float x = rng.range(-560, 560), z = rng.range(-560, 560);
+            float r = std::sqrt(x * x + z * z), h = ilo::terrainHeight(x, z);
+            if (h < 1.0f || r < 130.0f || r > 560.0f || slopeAt(x, z) > 0.45f)
+                continue;
+            FieldInstance fi;
+            fi.pos = glm::vec3(x, h, z);
+            fi.tintEmissive = glm::vec4(rng.range(0.85f, 1.15f), rng.range(0.85f, 1.1f), rng.range(0.8f, 1.05f), 0.0f);
+            fi.xform = glm::vec4(rng.range(0.8f, 1.4f), rng.range(0, 6.2831853f), 0.14f, rng.range(0, 6.2831853f));
+            inst.push_back(fi);
+        }
+        mFields.emplace_back();
+        mFields.back().build(leaf, inst);
+    }
+    {
+        proc::Rng bk(303u);
+        proc::Mesh bMesh;
+        proc::birch(bMesh, glm::vec3(0), bk);
+        std::vector<FieldInstance> inst;
+        for (int i = 0; i < 1400 && (int)inst.size() < 220; i++) {
+            float x = rng.range(-520, 520), z = rng.range(-520, 520);
+            float r = std::sqrt(x * x + z * z), h = ilo::terrainHeight(x, z);
+            if (h < 1.0f || r < 150.0f || r > 520.0f || slopeAt(x, z) > 0.4f)
+                continue;
+            FieldInstance fi;
+            fi.pos = glm::vec3(x, h, z);
+            fi.tintEmissive = glm::vec4(rng.range(0.9f, 1.1f), rng.range(0.9f, 1.1f), rng.range(0.9f, 1.1f), 0.0f);
+            fi.xform = glm::vec4(rng.range(0.8f, 1.3f), rng.range(0, 6.2831853f), 0.22f, rng.range(0, 6.2831853f));
+            inst.push_back(fi);
+        }
+        mFields.emplace_back();
+        mFields.back().build(bMesh, inst);
+    }
+
     // Glowing wildflowers in the meadows (emissive, sway).
     {
         proc::Mesh flower = proc::makeFlower(rng);

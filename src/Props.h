@@ -60,6 +60,43 @@ inline void cone(Mesh &m, glm::vec3 c0, float r, float h, int seg, glm::vec3 col
     }
 }
 
+// Low-poly UV sphere centred at c (used for tree canopies, berries, etc).
+inline void sphere(Mesh &m, glm::vec3 c, float r, int rings, int segs, glm::vec3 col, glm::vec3 mtl) {
+    for (int i = 0; i < rings; i++) {
+        float t0 = 3.14159265f * i / rings, t1 = 3.14159265f * (i + 1) / rings;
+        for (int j = 0; j < segs; j++) {
+            float p0 = 6.2831853f * j / segs, p1 = 6.2831853f * (j + 1) / segs;
+            glm::vec3 a = c + r * glm::vec3(std::sin(t0) * std::cos(p0), std::cos(t0), std::sin(t0) * std::sin(p0));
+            glm::vec3 b = c + r * glm::vec3(std::sin(t1) * std::cos(p0), std::cos(t1), std::sin(t1) * std::sin(p0));
+            glm::vec3 d = c + r * glm::vec3(std::sin(t1) * std::cos(p1), std::cos(t1), std::sin(t1) * std::sin(p1));
+            glm::vec3 e = c + r * glm::vec3(std::sin(t0) * std::cos(p1), std::cos(t0), std::sin(t0) * std::sin(p1));
+            tri(m, a, b, d, col, mtl);
+            tri(m, a, d, e, col, mtl);
+        }
+    }
+}
+
+// A round broadleaf tree: short trunk + a couple of leafy canopy spheres.
+inline void broadleaf(Mesh &m, glm::vec3 at, Rng &rng) {
+    glm::vec3 mtl(8, 0.1f, 0);
+    float h = rng.range(3.2f, 5.8f);
+    cylinder(m, at, h * 0.06f, h * 0.045f, h * 0.55f, 5, glm::vec3(0.20f, 0.13f, 0.08f), mtl);
+    glm::vec3 g(rng.range(0.08f, 0.20f), rng.range(0.30f, 0.52f), rng.range(0.07f, 0.16f));
+    sphere(m, at + glm::vec3(0, h * 0.7f, 0), h * 0.34f, 4, 6, g, mtl);
+    sphere(m, at + glm::vec3(h * 0.12f, h * 0.85f, h * 0.05f), h * 0.24f, 4, 6, g * 1.12f, mtl);
+    sphere(m, at + glm::vec3(-h * 0.1f, h * 0.78f, -h * 0.08f), h * 0.22f, 4, 6, g * 0.92f, mtl);
+}
+
+// A slender white birch: pale trunk + a sparse light canopy.
+inline void birch(Mesh &m, glm::vec3 at, Rng &rng) {
+    glm::vec3 mtl(10, 0.12f, 0);
+    float h = rng.range(4.5f, 7.5f);
+    cylinder(m, at, h * 0.03f, h * 0.02f, h * 0.85f, 5, glm::vec3(0.82f, 0.85f, 0.86f), mtl);
+    glm::vec3 g(rng.range(0.30f, 0.45f), rng.range(0.45f, 0.62f), rng.range(0.18f, 0.30f));
+    sphere(m, at + glm::vec3(0, h * 0.85f, 0), h * 0.22f, 4, 6, g, mtl);
+    sphere(m, at + glm::vec3(h * 0.08f, h * 0.72f, 0), h * 0.16f, 4, 5, g * 1.1f, mtl);
+}
+
 // Lumpy low-poly rock around `at`.
 inline void rock(Mesh &m, glm::vec3 at, float r, Rng &rng, glm::vec3 col) {
     glm::vec3 mtl(20, 0.3f, 0);
