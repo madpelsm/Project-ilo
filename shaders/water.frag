@@ -18,6 +18,33 @@ uniform int uDimpleCount;
 uniform vec3 uAuroraColor;     // woven-constellation hue the Mere catches at night
 uniform float uAuroraColorMix; // 0 = default green aurora .. ~0.7 = full woven colour
 
+// Shared aerial fog + the pooling ground-mist so the lake melts into the same air as
+// the land. KEEP applyMist IN SYNC with secondPassFrag.frag.
+uniform vec3 uFogColor;
+uniform float uFogDensity;
+uniform sampler2D uMistNoise;
+uniform vec3 uMistColor;
+uniform float uMistDensity;
+uniform float uMistBaseY;
+uniform float uMistHeightFalloff;
+uniform vec2 uMistOriginXZ; // 0 here (water.vert is true world)
+uniform vec3 uSunlight;
+
+vec3 applyMist(vec3 col, vec3 P, vec3 eye) {
+    if (uMistDensity <= 0.0)
+        return col;
+    float heightFactor = exp(-uMistHeightFalloff * max(P.y - uMistBaseY, 0.0));
+    float dist = length(P - eye);
+    float distFactor = 1.0 - exp(-dist * uMistDensity);
+    vec2 np = (P.xz + uMistOriginXZ) * 0.01;
+    float n = texture(uMistNoise, np + uTime * 0.004).r * 0.65 + texture(uMistNoise, np * 2.7 - uTime * 0.006).r * 0.35;
+    float m = clamp(heightFactor * distFactor * (0.4 + 1.1 * n), 0.0, 0.88);
+    vec3 rd = normalize(P - eye);
+    float scat = pow(max(dot(rd, normalize(uSunDir)), 0.0), 8.0);
+    vec3 mc = uMistColor + uSunlight * scat * 0.5;
+    return mix(col, mc, m);
+}
+
 vec3 reflSky(vec3 r) {
     vec3 c = mix(uSkyHorizon, uSkyTop, pow(max(r.y, 0.0), 0.5));
     c += uSunColor * pow(max(dot(r, normalize(uSunDir)), 0.0), 200.0) * 3.0;   // sun glint
@@ -67,6 +94,13 @@ void main() {
     float foam = smoothstep(0.7, 0.0, depth); // bright line right at the shoreline
     col = mix(col, vec3(0.65, 0.82, 0.88), foam * 0.5);
     col += (uHorizonGlow + uSkyHorizon) * dimpleHi * 0.4; // crest of each fish ring catches the light
+
+    // Melt the far lake into the same aerial fog as the land, then lay the mist sheet on
+    // top so the Mere reads as part of the misted basin, not a hard mirror to the horizon.
+    float dist = length(vWorldPos - eyePos);
+    float distFog = exp(-pow(dist * uFogDensity, 2.0));
+    col = mix(uFogColor, col, clamp(distFog, 0.0, 1.0));
+    col = applyMist(col, vWorldPos, eyePos);
 
     FragColor = col;
 }

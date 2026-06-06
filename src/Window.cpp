@@ -261,6 +261,7 @@ void Window::initGL() {
     glUniform1i(glGetUniformLocation(lp, "uAO"), 5);
     glUniform1i(glGetUniformLocation(lp, "uShadowMap"), 6);
     glUniform1i(glGetUniformLocation(lp, "uShadowMapFar"), 7);
+    glUniform1i(glGetUniformLocation(lp, "uMistNoise"), 9);
     glUniformBlockBinding(lp, glGetUniformBlockIndex(lp, "LightBlock"), 0);
 
     // SSAO: hemisphere kernel (clustered toward the surface) + a 4x4 rotation tile,
@@ -306,6 +307,7 @@ void Window::initGL() {
     glUniform1i(glGetUniformLocation(godrayProg.getProgramID(), "gNormal"), 1);
     waterProg.useProgram();
     glUniform1i(glGetUniformLocation(waterProg.getProgramID(), "gPosition"), 0);
+    glUniform1i(glGetUniformLocation(waterProg.getProgramID(), "uMistNoise"), 2);
 
     // The Mere: a flat water plane (y=0) over the central basin.
     {
@@ -468,6 +470,46 @@ void Window::loadGeometries() {
 #endif
 }
 
+void Window::initMistNoise() {
+    // A seamless 256x256 tiling fbm, CPU-baked once; the mist samples it world-locked so
+    // the silver air drifts slowly and pools without crawling with the camera.
+    const int N = 256;
+    std::vector<unsigned char> px((size_t)N * N * 4);
+    auto hash = [](int x, int y) {
+        int h = x * 374761393 + y * 668265263;
+        h = (h ^ (h >> 13)) * 1274126177;
+        return ((h ^ (h >> 16)) & 0xFFFF) / 65535.0f;
+    };
+    auto vnoise = [&](float x, float y, int period) {
+        int xi = (int)std::floor(x), yi = (int)std::floor(y);
+        float xf = x - xi, yf = y - yi;
+        auto wrap = [&](int v) { return ((v % period) + period) % period; };
+        float u = xf * xf * (3.0f - 2.0f * xf), v = yf * yf * (3.0f - 2.0f * yf);
+        float a = hash(wrap(xi), wrap(yi)), b = hash(wrap(xi + 1), wrap(yi));
+        float c = hash(wrap(xi), wrap(yi + 1)), d = hash(wrap(xi + 1), wrap(yi + 1));
+        return (a + (b - a) * u) + (c - a) * v * (1.0f - u) + (d - b) * u * v;
+    };
+    for (int y = 0; y < N; y++)
+        for (int x = 0; x < N; x++) {
+            float fx = x / (float)N, fy = y / (float)N;
+            float s = 0.0f, amp = 0.5f;
+            int period = 4;
+            for (int o = 0; o < 4; o++) {
+                s += amp * vnoise(fx * period, fy * period, period);
+                period *= 2;
+                amp *= 0.5f;
+            }
+            unsigned char c = (unsigned char)(std::max(0.0f, std::min(1.0f, s)) * 255.0f);
+            size_t i = ((size_t)y * N + x) * 4;
+            px[i] = px[i + 1] = px[i + 2] = c;
+            px[i + 3] = 255;
+        }
+    mNoiseTex.create(N, N, GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE, GL_LINEAR, GL_REPEAT);
+    glBindTexture(GL_TEXTURE_2D, mNoiseTex.id);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, N, N, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+    glBindTexture(GL_TEXTURE_2D, 0);
+}
+
 void Window::initAssets() {
     for (unsigned int i = 0; i < mGameObjects.size(); i++) {
         mGameObjects[i]->initGL();
@@ -493,6 +535,8 @@ void Window::initAssets() {
 
     // Fallen-twin markers for woven constellations (same glassy spire as a beacon).
     mTwinField.buildDynamic(proc::makeBeacon(), MAX_CSTARS);
+
+    initMistNoise(); // tiling fbm for the volumetric mist (resolution-independent)
 
     // Wind-rivers: a few invisible lift+carry lanes you can glide into, made visible by
     // streams of drifting motes. Lanes climb (y = ground + offset) so they read as rising.
@@ -851,6 +895,10 @@ void Window::run() {
         mNoShadow = true; // A/B: force the sun shadow off
     if (std::getenv("ILO_NOFARSHADOW"))
         mNoFarShadow = true; // A/B: near cascade only
+    if (std::getenv("ILO_NOMIST"))
+        mMistStrength = 0.0f; // A/B: force the mist off
+    if (const char *mi = std::getenv("ILO_MIST"))
+        mMistStrength = (float)std::atof(mi); // force-thicken for preview
     if (const char *sd = std::getenv("ILO_SHADOWDEBUG"))
         mShadowDebug = std::atoi(sd); // 1 = grayscale shadow factor
 
@@ -2205,6 +2253,16 @@ void Window::renderLightingPass() {
     glUniform1f(glGetUniformLocation(pid, "uShadowBiasFar"), 0.0018f);
     glUniform1i(glGetUniformLocation(pid, "uNoFarShadow"), mNoFarShadow ? 1 : 0);
 
+    // Volumetric mist (pools in the hollows; world-locked drifting noise on unit 9).
+    glActiveTexture(GL_TEXTURE9);
+    glBindTexture(GL_TEXTURE_2D, mNoiseTex.id);
+    glUniform1f(glGetUniformLocation(pid, "uTime"), mTime);
+    glUniform3f(glGetUniformLocation(pid, "uMistColor"), mSky.mistColor.x, mSky.mistColor.y, mSky.mistColor.z);
+    glUniform1f(glGetUniformLocation(pid, "uMistDensity"), mSky.mistDensity * mMistStrength);
+    glUniform1f(glGetUniformLocation(pid, "uMistBaseY"), mMistBaseY);
+    glUniform1f(glGetUniformLocation(pid, "uMistHeightFalloff"), mMistHeightFalloff);
+    glUniform2f(glGetUniformLocation(pid, "uMistOriginXZ"), mRenderOrigin.x, mRenderOrigin.z);
+
     lightUBO.bindBase(0);
     tri.draw();
     glActiveTexture(GL_TEXTURE0);
@@ -2245,6 +2303,17 @@ void Window::renderWater() {
     glUniform1f(glGetUniformLocation(pid, "uStarFade"), mSky.starFade);
     glUniform3f(glGetUniformLocation(pid, "uAuroraColor"), mAuroraColor.x, mAuroraColor.y, mAuroraColor.z);
     glUniform1f(glGetUniformLocation(pid, "uAuroraColorMix"), mAuroraColorMix);
+    // Aerial fog + pooling mist (so the lake shares the land's air). Noise on unit 2.
+    glUniform3f(glGetUniformLocation(pid, "uFogColor"), mSky.fogColor.x, mSky.fogColor.y, mSky.fogColor.z);
+    glUniform1f(glGetUniformLocation(pid, "uFogDensity"), mSky.fogDensity);
+    glUniform3f(glGetUniformLocation(pid, "uSunlight"), mSky.sunlight.x, mSky.sunlight.y, mSky.sunlight.z);
+    glUniform3f(glGetUniformLocation(pid, "uMistColor"), mSky.mistColor.x, mSky.mistColor.y, mSky.mistColor.z);
+    glUniform1f(glGetUniformLocation(pid, "uMistDensity"), mSky.mistDensity * mMistStrength);
+    glUniform1f(glGetUniformLocation(pid, "uMistBaseY"), mMistBaseY);
+    glUniform1f(glGetUniformLocation(pid, "uMistHeightFalloff"), mMistHeightFalloff);
+    glUniform2f(glGetUniformLocation(pid, "uMistOriginXZ"), 0.0f, 0.0f);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, mNoiseTex.id);
     glUniform1i(glGetUniformLocation(pid, "uDimpleCount"), (int)mDimples.size());
     if (!mDimples.empty())
         glUniform4fv(glGetUniformLocation(pid, "uDimple"), (GLsizei)mDimples.size(), (const float *)mDimples.data());

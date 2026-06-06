@@ -30,6 +30,8 @@ struct Sky {
     float sunDiscSize = 0.015f;
     float moonSize = 0.07f;
     float nightAmount = 1.0f; // 1 deep night .. 0 full day
+    glm::vec3 mistColor = glm::vec3(0.62f, 0.70f, 0.82f); // pooling ground mist
+    float mistDensity = 0.0f;                              // distance falloff rate (~0 at noon)
 
     static glm::vec3 mix3(const glm::vec3 &a, const glm::vec3 &b, float t) {
         t = std::max(0.0f, std::min(1.0f, t));
@@ -91,5 +93,11 @@ struct Sky {
         ambient += glm::vec3(0.045f, 0.05f, 0.055f) * rad;
         fogDensity *= (1.0f - 0.45f * rad);
         skyHorizon += glm::vec3(0.05f, 0.045f, 0.06f) * rad * (0.4f + 0.6f * nightAmount);
+
+        // Volumetric ground-mist: silver air pooling at dawn/dusk/night, nearly gone at
+        // noon (twilight->0), thinned as the vale brightens. Catches the horizon glow.
+        mistDensity = 0.0065f * (twilight + 0.30f * nightAmount + 0.05f) * (1.0f - 0.4f * rad);
+        glm::vec3 mistNight(0.60f, 0.68f, 0.82f), mistDay(0.80f, 0.83f, 0.88f);
+        mistColor = mix3(mistNight, mistDay, dayAmt) + horizonGlow * 0.15f;
     }
 };

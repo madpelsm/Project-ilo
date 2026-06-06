@@ -80,6 +80,9 @@ class Window {
     float mShadowRadiusFar = 512.0f;
     glm::mat4 mLightVPFar = glm::mat4(1.0f);
     bool mNoFarShadow = false;
+    // Volumetric ground-mist (pools in the hollows; CPU-baked tiling fbm noise).
+    ilo::Texture2D mNoiseTex;
+    float mMistBaseY = 0.5f, mMistHeightFalloff = 0.4f, mMistStrength = 1.0f;
     GLuint mWaterVao = 0, mWaterVbo = 0;
     GLuint mParticleVao = 0, mParticleVbo = 0;
     int mParticleCount = 0;
@@ -272,6 +275,7 @@ class Window {
     void render();
     void renderSky();
     void renderShadowPass();
+    void initMistNoise();
     void renderGeometryPass();
     void renderSSAO();
     void renderLightingPass();

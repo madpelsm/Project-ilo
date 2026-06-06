@@ -29,6 +29,15 @@ uniform float uFogDensity;
 uniform float uFogHeightFalloff;
 uniform float uFogBaseY;
 
+// Volumetric ground-mist (pools in the hollows; drifting world-locked fbm).
+uniform float uTime;
+uniform sampler2D uMistNoise;
+uniform vec3 uMistColor;
+uniform float uMistDensity;       // distance falloff rate (0 = off)
+uniform float uMistBaseY;
+uniform float uMistHeightFalloff; // mist thins with height above baseY
+uniform vec2 uMistOriginXZ;       // + P.xz -> true world (noise stays world-locked)
+
 uniform sampler2D uSkyTex;  // half-res procedural sky (background + atmosphere)
 uniform sampler2D uAO;      // screen-space ambient occlusion (1 open .. 0 occluded)
 uniform vec3 uSunDir;       // toward the sun
@@ -59,6 +68,24 @@ vec3 applyFog(vec3 col, vec3 P) {
     float h = clamp(exp(-(P.y - uFogBaseY) * uFogHeightFalloff), 0.0, 1.0);
     float fog = clamp(mix(1.0, distFog, h), 0.0, 1.0);
     return mix(uFogColor, col, fog); // fog==1 -> unfogged
+}
+
+// Ground-pooling mist: thick low and far (the ray crosses more of the thin band where
+// the land is low), clear on ridges; a slow world-locked drifting fbm breaks it up and
+// a forward-scatter glow toward the sun gives the dawn "silver air".
+vec3 applyMist(vec3 col, vec3 P, vec3 eye) {
+    if (uMistDensity <= 0.0)
+        return col;
+    float heightFactor = exp(-uMistHeightFalloff * max(P.y - uMistBaseY, 0.0));
+    float dist = length(P - eye);
+    float distFactor = 1.0 - exp(-dist * uMistDensity);
+    vec2 np = (P.xz + uMistOriginXZ) * 0.01;
+    float n = texture(uMistNoise, np + uTime * 0.004).r * 0.65 + texture(uMistNoise, np * 2.7 - uTime * 0.006).r * 0.35;
+    float m = clamp(heightFactor * distFactor * (0.4 + 1.1 * n), 0.0, 0.88);
+    vec3 rd = normalize(P - eye);
+    float scat = pow(max(dot(rd, normalize(uSunDir)), 0.0), 8.0);
+    vec3 mc = uMistColor + uSunlight * scat * 0.5;
+    return mix(col, mc, m);
 }
 
 // 3x3 hardware-PCF (each tap a free 2x2 bilinear compare -> ~6x6 soft footprint).
@@ -168,6 +195,7 @@ void main() {
     lit += rim * uRimColor * albedo * ao;
 
     lit = applyFog(lit, P);
+    lit = applyMist(lit, P, eyePos); // pooling ground-mist on top of the aerial fog
     lit += albedo * emissive; // emissive after fog so glowing sources punch through
     if (uShadowDebug == 1) { // ILO_SHADOWDEBUG: prove registration/PCF independent of tonemap
         FragColor = vec3(sunSh);
