@@ -16,6 +16,12 @@ const float HARD_BOUND = 24.0f; // clamp camera to the play area
 const float DT_CLAMP = 0.05f;
 const float COLLECT_RADIUS = 1.8f;
 
+// Fuel / warmth tuning (warmth units), from the design spec.
+const float FUEL_MAX = 100.0f;
+const float FUEL_START = 70.0f;
+const float FUEL_DRAIN = 2.5f;
+const float SPRINT_DRAIN_EXTRA = 1.5f;
+
 void buildProgram(ShaderProgram &prog, const char *vsPath, const char *fsPath) {
     Shader vs, fs;
     vs.loadShader(vsPath, GL_VERTEX_SHADER);
@@ -56,6 +62,7 @@ void Window::sdlDie() {
         mGameObjects[i]->cleanup();
     }
     mFireflies.destroy();
+    mHud.destroy();
     destroyFramebuffers();
     tri.destroy();
     lightUBO.destroy();
@@ -137,6 +144,7 @@ void Window::initGL() {
 
     tri.init();
     lightUBO.init();
+    mHud.init();
 
     // 1x1 black texture used as the bloom input until the bloom pass exists.
     glGenTextures(1, &mBlackTex);
@@ -223,8 +231,14 @@ void Window::run() {
     const char *camEnv = std::getenv("ILO_CAM");
     int shotFrame = shotFrameEnv ? std::atoi(shotFrameEnv) : 90;
     int frame = 0;
-    if (const char *fuelEnv = std::getenv("ILO_FUEL"))
-        mFuel = (float)std::atof(fuelEnv); // testing knob to preview the lantern at a given warmth
+    if (const char *fuelEnv = std::getenv("ILO_FUEL")) {
+        // testing knob: preview the lantern at a given warmth, held constant
+        mFuelW = std::max(0.0f, std::min(1.0f, (float)std::atof(fuelEnv))) * FUEL_MAX;
+        mFreezeFuel = true;
+        mState = GameState::Playing;
+    }
+    if (const char *cEnv = std::getenv("ILO_COLLECTED"))
+        mCollected = std::atoi(cEnv); // testing knob: preview Heart progress / win state
     if (shotPath && camEnv) {
         float x, y, z, yaw, pitch;
         if (std::sscanf(camEnv, "%f,%f,%f,%f,%f", &x, &y, &z, &yaw, &pitch) == 5) {
@@ -255,20 +269,25 @@ void Window::run() {
 
 void Window::checkEvents() {
     const Uint8 *state = SDL_GetKeyboardState(NULL);
+    bool canMove = (mState == GameState::Playing || mState == GameState::Intro);
     bool sprint = state[SDL_SCANCODE_LSHIFT] || state[SDL_SCANCODE_RSHIFT];
+    bool moving = state[SDL_SCANCODE_W] || state[SDL_SCANCODE_S] || state[SDL_SCANCODE_A] || state[SDL_SCANCODE_D];
+    mSprinting = canMove && sprint && moving;
     float speed = (sprint ? SPRINT_SPEED : WALK_SPEED) * mDt;
-    if (state[SDL_SCANCODE_W])
-        mCamera.moveForward(speed);
-    if (state[SDL_SCANCODE_S])
-        mCamera.moveForward(-speed);
-    if (state[SDL_SCANCODE_A])
-        mCamera.moveRight(-speed);
-    if (state[SDL_SCANCODE_D])
-        mCamera.moveRight(speed);
-    if (state[SDL_SCANCODE_SPACE])
-        mCamera.moveUp(FLY_VERT_SPEED * mDt);
-    if (state[SDL_SCANCODE_LCTRL] || state[SDL_SCANCODE_C])
-        mCamera.moveUp(-FLY_VERT_SPEED * mDt);
+    if (canMove) {
+        if (state[SDL_SCANCODE_W])
+            mCamera.moveForward(speed);
+        if (state[SDL_SCANCODE_S])
+            mCamera.moveForward(-speed);
+        if (state[SDL_SCANCODE_A])
+            mCamera.moveRight(-speed);
+        if (state[SDL_SCANCODE_D])
+            mCamera.moveRight(speed);
+        if (state[SDL_SCANCODE_SPACE])
+            mCamera.moveUp(FLY_VERT_SPEED * mDt);
+        if (state[SDL_SCANCODE_LCTRL] || state[SDL_SCANCODE_C])
+            mCamera.moveUp(-FLY_VERT_SPEED * mDt);
+    }
 
     while (SDL_PollEvent(&event)) {
         switch (event.type) {
@@ -286,6 +305,15 @@ void Window::checkEvents() {
             switch (event.key.keysym.scancode) {
             case SDL_SCANCODE_ESCAPE:
                 closed = true;
+                break;
+            case SDL_SCANCODE_P:
+                if (mState == GameState::Playing)
+                    mState = GameState::Paused;
+                else if (mState == GameState::Paused)
+                    mState = GameState::Playing;
+                break;
+            case SDL_SCANCODE_R:
+                resetGame();
                 break;
             case SDL_SCANCODE_RETURN:
                 if (event.key.keysym.mod & KMOD_LALT) {
@@ -331,26 +359,83 @@ void Window::packLights() {
     lantern.colorIntensity[3] = li;
     mLights.push_back(lantern);
 
+    // Heart of the Grove: a dedicated light that brightens as the player progresses.
+    {
+        float p = mHeartP;
+        ilo::OmniLightGPU heart;
+        heart.posRadius[0] = mHeartPos.x;
+        heart.posRadius[1] = mHeartPos.y;
+        heart.posRadius[2] = mHeartPos.z;
+        heart.posRadius[3] = glm::mix(4.0f, 20.0f, p);
+        float intensity = glm::mix(0.3f, 5.0f, p);
+        if (mState == GameState::Won)
+            intensity = 6.0f + 1.5f * std::sin(6.2831f * 0.5f * mTime);
+        heart.colorIntensity[0] = mHeartColor.x;
+        heart.colorIntensity[1] = mHeartColor.y;
+        heart.colorIntensity[2] = mHeartColor.z;
+        heart.colorIntensity[3] = intensity;
+        mLights.push_back(heart);
+    }
+
     // Firefly lights (nearest motes to the camera), capped to keep the loop cheap.
     int cap = mLowSpec ? 14 : 46;
     mFireflies.appendLights(mLights, mTime, mCamera.mPosition, cap);
-
-    // (Heart light appended in a later slice)
 
     lightUBO.upload(mLights.data(), (int)mLights.size());
 }
 
 void Window::update() {
+    if (mState == GameState::Intro) {
+        mIntroTimer -= mDt;
+        if (mIntroTimer <= 0.0f)
+            mState = GameState::Playing;
+    }
+
     if (mState == GameState::Playing) {
         float fuelGained = 0.0f;
         int got = mFireflies.update(mDt, mTime, mCamera.mPosition, COLLECT_RADIUS, fuelGained);
-        if (got > 0)
-            mCollected += got;
+        mCollected += got;
+        mFuelW = std::min(FUEL_MAX, mFuelW + fuelGained);
+        if (!mFreezeFuel) {
+            float drain = FUEL_DRAIN + (mSprinting ? SPRINT_DRAIN_EXTRA : 0.0f);
+            mFuelW -= drain * mDt;
+        }
+        if (mFuelW <= 0.0f) {
+            mFuelW = 0.0f;
+            mState = GameState::Lost;
+        }
+        if (mCollected >= mTarget)
+            mState = GameState::Won;
     }
+
+    mFuel = mFuelW / FUEL_MAX;
+    updateHeart();
     packLights();
     for (unsigned int i = 0; i < mGameObjects.size(); i++) {
         mGameObjects[i]->update();
     }
+}
+
+void Window::updateHeart() {
+    float p = std::min(1.0f, mCollected / (float)mTarget);
+    mHeartP = p;
+    glm::vec3 ember(1.0f, 0.25f, 0.05f), gold(1.0f, 0.85f, 0.60f);
+    mHeartColor = glm::mix(ember, gold, p);
+    mHeartEmissive = glm::mix(0.15f, 6.0f, p);
+    if (mState == GameState::Won) // breathe when fully ablaze
+        mHeartEmissive = 7.0f + 1.0f * std::sin(6.2831f * 0.5f * mTime);
+    if (mHeart)
+        mHeart->setEmissive(glm::vec4(mHeartColor, mHeartEmissive));
+}
+
+void Window::resetGame() {
+    mFuelW = FUEL_START;
+    mCollected = 0;
+    mState = GameState::Intro;
+    mIntroTimer = 1.5f;
+    mCamera.mPosition = glm::vec3(0, 2, 18);
+    mCamera.setYawPitch(0, 0);
+    mFireflies.resetAll(glm::vec3(0, 2, 18));
 }
 
 void Window::renderGeometryPass() {
@@ -478,11 +563,64 @@ void Window::renderComposite() {
     tri.draw();
 }
 
+void Window::renderHud() {
+    mHud.begin(mWidth, mHeight);
+    float f = mFuel;
+    glm::vec4 warm(1.0f, 0.95f, 0.8f, 1.0f);
+    char buf[80];
+
+    // Firefly counter (top-left).
+    std::snprintf(buf, sizeof(buf), "FIREFLIES  %d / %d", mCollected, mTarget);
+    mHud.text(0.04f, 0.05f, 0.040f, buf, warm);
+
+    // Warmth meter (bottom-left).
+    mHud.text(0.04f, 0.860f, 0.026f, "WARMTH", warm);
+    mHud.rect(0.04f, 0.90f, 0.30f, 0.035f, glm::vec4(0.05f, 0.05f, 0.07f, 0.6f));
+    glm::vec4 fill = f > 0.5f ? glm::vec4(1.0f, 0.75f, 0.4f, 1.0f)
+                              : (f > 0.25f ? glm::vec4(1.0f, 0.5f, 0.15f, 1.0f) : glm::vec4(1.0f, 0.2f, 0.1f, 1.0f));
+    if (f <= 0.25f)
+        fill.a *= 0.6f + 0.4f * std::sin(6.2831f * 2.0f * mTime);
+    if (f > 0.001f)
+        mHud.rect(0.04f, 0.90f, 0.30f * f, 0.035f, fill);
+
+    if (mState == GameState::Playing && f <= 0.20f && ((int)(mTime * 2.0f) % 2 == 0))
+        mHud.textCentered(0.5f, 0.12f, 0.035f, "FIND A FIREFLY", glm::vec4(1.0f, 0.25f, 0.2f, 1.0f));
+
+    if (mState == GameState::Intro) {
+        int n = (int)std::ceil(mIntroTimer);
+        n = std::max(1, std::min(3, n));
+        std::snprintf(buf, sizeof(buf), "%d", n);
+        mHud.textCentered(0.5f, 0.30f, 0.045f, "FIREFLY GROVE", warm);
+        mHud.textCentered(0.5f, 0.42f, 0.12f, buf, warm);
+    }
+    if (mState == GameState::Paused) {
+        mHud.rect(0, 0, 1, 1, glm::vec4(0, 0, 0, 0.5f));
+        mHud.textCentered(0.5f, 0.42f, 0.07f, "PAUSED", warm);
+        mHud.textCentered(0.5f, 0.54f, 0.035f, "[P] RESUME", warm);
+    }
+    if (mState == GameState::Won) {
+        mHud.rect(0, 0, 1, 1, glm::vec4(0.10f, 0.15f, 0.10f, 0.55f));
+        mHud.textCentered(0.5f, 0.34f, 0.07f, "THE GROVE AWAKENS", glm::vec4(0.8f, 1.0f, 0.7f, 1.0f));
+        std::snprintf(buf, sizeof(buf), "FIREFLIES GATHERED  %d / %d", mCollected, mTarget);
+        mHud.textCentered(0.5f, 0.46f, 0.040f, buf, warm);
+        mHud.textCentered(0.5f, 0.56f, 0.035f, "PRESS [R] TO PLAY AGAIN", warm);
+    }
+    if (mState == GameState::Lost) {
+        mHud.rect(0, 0, 1, 1, glm::vec4(0.0f, 0.0f, 0.02f, 0.85f));
+        mHud.textCentered(0.5f, 0.36f, 0.07f, "LOST IN THE DARK", glm::vec4(0.6f, 0.6f, 0.85f, 1.0f));
+        mHud.textCentered(0.5f, 0.48f, 0.034f, "YOUR LANTERN WENT COLD.", warm);
+        mHud.textCentered(0.5f, 0.56f, 0.034f, "PRESS [R] TO TRY AGAIN", warm);
+    }
+
+    mHud.end();
+}
+
 void Window::render() {
     renderGeometryPass();
     renderLightingPass();
     renderBloom();
     renderComposite();
+    renderHud();
 
     SDL_GL_SwapWindow(mSDLwindow);
     float currentTime = SDL_GetTicks();

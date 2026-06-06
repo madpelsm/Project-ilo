@@ -11,13 +11,16 @@ int main(int argc, char *argv[]) {
     Camera c1(glm::vec3(0, 2, 18), glm::vec3(0, 0, -1));
     w.setCamera(c1);
 
-    // The forest: tile the miniforest patch into a 3x3 grove.
+    // The forest: tile the miniforest patch into a 3x3 grove, leaving the centre
+    // tile open as a glade for the Heart of the Grove.
     Player *forest = new Player("./shapes/miniforest.obj");
     forest->setGrassWave(1.0f);
     std::vector<glm::vec3> offs;
     std::vector<glm::vec4> tints;
     for (int i = -1; i <= 1; i++) {
         for (int j = -1; j <= 1; j++) {
+            if (i == 0 && j == 0)
+                continue; // clearing for the Heart
             offs.push_back(glm::vec3(i * 15.0f, 0.0f, j * 13.0f));
             tints.push_back(glm::vec4(1, 1, 1, 0));
         }
@@ -25,6 +28,15 @@ int main(int argc, char *argv[]) {
     forest->setInstances(offs, tints);
     w.addNPC(*forest);
     w.mForest = forest;
+
+    // The Heart of the Grove: a glowing idol at the origin that wakes as fireflies
+    // are gathered. Its emissive colour/strength is driven each frame by the game.
+    Player *heart = new Player("./shapes/suzanne.obj");
+    heart->setScale(glm::vec3(0.9f, 0.9f, 0.9f));
+    heart->setTransform(0.0f, 1.6f, 0.0f, 0.0f);
+    heart->setEmissive(glm::vec4(1.0f, 0.25f, 0.05f, 0.15f));
+    w.addNPC(*heart);
+    w.mHeart = heart;
 
     // A couple of deer quietly inhabiting the grove.
     Player *deer1 = new Player("./shapes/Deer1.obj");

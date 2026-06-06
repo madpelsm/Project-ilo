@@ -128,6 +128,11 @@ void FireflySystem::init(int count) {
         spawn(f, spawnCam);
 }
 
+void FireflySystem::resetAll(const glm::vec3 &camPos) {
+    for (auto &f : mFlies)
+        spawn(f, camPos);
+}
+
 void FireflySystem::destroy() {
     if (mVao)
         glDeleteVertexArrays(1, &mVao);

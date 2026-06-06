@@ -26,6 +26,7 @@ class FireflySystem {
     int mCollectedThisFrame = 0;
 
     void init(int count);
+    void resetAll(const glm::vec3 &camPos); // respawn every mote (game restart)
     void destroy();
     // Advance the simulation; returns the number of fireflies collected this frame
     // (a mote within collectRadius of camPos). collectedFuel sums their fuel reward.

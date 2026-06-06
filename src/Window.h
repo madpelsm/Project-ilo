@@ -2,6 +2,7 @@
 #include "Camera.h"
 #include "Firefly.h"
 #include "GameObject.h"
+#include "Hud.h"
 #include "Player.h"
 #include "Render.h"
 #include "Shader.h"
@@ -64,15 +65,26 @@ class Window {
     Player *mForest = nullptr;
     Player *mHeart = nullptr;
     FireflySystem mFireflies;
+    Hud mHud;
 
     // lights packed each frame; [0] is the lantern
     std::vector<ilo::OmniLightGPU> mLights;
 
     // game state
-    GameState mState = GameState::Playing;
-    float mFuel = 1.0f;    // 0..1 normalised warmth (real units handled in update)
+    GameState mState = GameState::Intro;
+    float mFuel = 1.0f;    // 0..1 normalised warmth (derived from mFuelW each frame)
+    float mFuelW = 70.0f;  // warmth in fuel units
     int mCollected = 0;
     int mTarget = 30;
+    float mIntroTimer = 1.5f;
+    bool mSprinting = false;
+    bool mFreezeFuel = false; // screenshot/testing: hold fuel constant
+
+    // Heart of the Grove
+    glm::vec3 mHeartPos = glm::vec3(0.0f, 1.6f, 0.0f);
+    glm::vec3 mHeartColor = glm::vec3(1.0f, 0.25f, 0.05f);
+    float mHeartEmissive = 0.15f;
+    float mHeartP = 0.0f;
 
     // sky / fog / ambient
     glm::vec3 mAmbient = glm::vec3(0.012f, 0.016f, 0.028f);
@@ -103,12 +115,15 @@ class Window {
     void renderLightingPass();
     void renderBloom();
     void renderComposite();
+    void renderHud();
     void checkEvents();
     void resize();
     void createFramebuffers();
     void destroyFramebuffers();
     void loadGeometries();
     void packLights();
+    void updateHeart();
+    void resetGame();
 
     void setvSync(bool vSyncStatus);
     void setMouseSensitivity(float _sensitivity);
