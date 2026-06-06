@@ -3,7 +3,7 @@
 // They make the framebuffer/texture lifetimes explicit so that resize no longer
 // leaks targets, and provide a VBO-less fullscreen triangle and a std140 light UBO.
 #include <cstdint>
-#include <glad/glad.h>
+#include "GL.h"
 #include <iostream>
 #include <vector>
 

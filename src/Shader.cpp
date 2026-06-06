@@ -11,6 +11,15 @@ bool Shader::loadShader(std::string pos, int shaderType) {
         return false;
     }
     std::string str((std::istreambuf_iterator<char>(t)), std::istreambuf_iterator<char>());
+#ifdef __EMSCRIPTEN__
+    // Translate the desktop GLSL 330 core shaders to WebGL2 GLSL ES 300: swap the
+    // first line (#version ...) for the ES version + default precision qualifiers.
+    {
+        size_t nl = str.find('\n');
+        std::string body = (nl == std::string::npos) ? std::string() : str.substr(nl + 1);
+        str = "#version 300 es\nprecision highp float;\nprecision highp int;\nprecision highp sampler2D;\n" + body;
+    }
+#endif
     shaderID = glCreateShader(shaderType);
     const char *c_str = str.c_str();
     if (shaderID == 0) {

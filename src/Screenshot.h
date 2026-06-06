@@ -5,7 +5,7 @@
 // a PNG can be produced offline. Used by the automated verification harness.
 #include <cstdint>
 #include <cstdio>
-#include <glad/glad.h>
+#include "GL.h"
 #include <string>
 #include <vector>
 

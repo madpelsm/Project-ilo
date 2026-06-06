@@ -1,6 +1,6 @@
 #pragma once
 #include <fstream>
-#include <glad/glad.h>
+#include "GL.h"
 #include <stdio.h>
 #include <vector>
 #ifdef _MSC_VER

@@ -3,7 +3,7 @@
 // composite. Coordinates are normalized with a top-left origin (0,0)..(1,1) so the
 // HUD rescales automatically on resize. Text uses an embedded 8x8 font atlas.
 #include "ShaderProgram.h"
-#include <glad/glad.h>
+#include "GL.h"
 #include <glm/glm.hpp>
 #include <string>
 #include <vector>

@@ -4,7 +4,7 @@
 // G-buffer), so the deferred lighting/bloom treats fireflies like any glowing object.
 #include "Render.h"
 #include "Vertex.h"
-#include <glad/glad.h>
+#include "GL.h"
 #include <glm/glm.hpp>
 #include <vector>
 

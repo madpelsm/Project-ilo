@@ -1,6 +1,6 @@
 #pragma once
 #include "Shader.h"
-#include <glad/glad.h>
+#include "GL.h"
 class ShaderProgram {
   public:
     GLuint programID = 0;

@@ -1,7 +1,7 @@
 #pragma once
 #include "Vertex.h"
 #include "tiny_obj_loader.h"
-#include <glad/glad.h>
+#include "GL.h"
 #include <iostream>
 #include <vector>
 class objectLoader {
