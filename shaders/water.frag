@@ -17,6 +17,9 @@ uniform vec4 uDimple[12]; // fish rises: xy = centre XZ (world), z = spawn time,
 uniform int uDimpleCount;
 uniform vec3 uAuroraColor;     // woven-constellation hue the Mere catches at night
 uniform float uAuroraColorMix; // 0 = default green aurora .. ~0.7 = full woven colour
+uniform sampler2D uReflection; // planar mirror of the world (rgb scene, a = geometry mask)
+uniform float uReflStrength;   // 0 = analytic sky only, 1 = full planar reflection
+uniform float uReflDistort;    // ripple-driven screen-space distortion of the reflection
 
 // Shared aerial fog + the pooling ground-mist so the lake melts into the same air as
 // the land. KEEP applyMist IN SYNC with secondPassFrag.frag.
@@ -89,7 +92,14 @@ void main() {
     vec3 R = reflect(-V, N);
     float fres = 0.02 + 0.98 * pow(1.0 - max(dot(V, N), 0.0), 5.0);
     vec3 deep = uWaterColor * (0.5 + 0.5 * exp(-depth * 0.4)); // a touch lighter where shallow
-    vec3 col = mix(deep, reflSky(R), fres);
+    // Planar reflection: the real world mirrored into the Mere. Sample the reflection
+    // target at this fragment's screen UV, rippled by the wave normal; where it carries
+    // geometry (alpha) use it, else fall back to the analytic sky (which keeps the sun/
+    // moon glints and clouds). uReflStrength=0 restores the pure analytic look (A/B).
+    vec2 ruv = clamp(uv + N.xz * uReflDistort, 0.0, 1.0);
+    vec4 planar = texture(uReflection, ruv);
+    vec3 reflCol = mix(reflSky(R), planar.rgb, planar.a * uReflStrength);
+    vec3 col = mix(deep, reflCol, fres);
 
     float foam = smoothstep(0.7, 0.0, depth); // bright line right at the shoreline
     col = mix(col, vec3(0.65, 0.82, 0.88), foam * 0.5);

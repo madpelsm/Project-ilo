@@ -66,6 +66,9 @@ class Window {
     ShaderProgram geometryProg, lightingProg, brightProg, blurProg, compositeProg, skyProg, waterProg, godrayProg, particleProg;
     ShaderProgram ssaoProg, ssaoBlurProg;
     ShaderProgram shadowProg; // sun shadow-map depth pass
+    ShaderProgram reflectionProg; // planar water reflection pass
+    glm::mat4 mReflVP = glm::mat4(1.0f);
+    bool mNoReflect = false;
     std::vector<glm::vec3> mSsaoKernel; // hemisphere offsets, uploaded once
     std::vector<glm::vec3> mSsaoNoise;  // 4x4 rotation tile, uploaded once
     // Sun shadow map (directional, camera-centred, texel-snapped, origin-relative).
@@ -88,7 +91,7 @@ class Window {
     int mParticleCount = 0;
 
     // render targets + helpers
-    ilo::Framebuffer gBuffer, hdrFBO, bloomA, bloomB, skyFBO, godrayFBO, ssaoFBO, ssaoBlurFBO, shadowFBO, shadowFarFBO;
+    ilo::Framebuffer gBuffer, hdrFBO, bloomA, bloomB, skyFBO, godrayFBO, ssaoFBO, ssaoBlurFBO, shadowFBO, shadowFarFBO, reflectionFBO;
     ilo::ScreenTri tri;
     ilo::LightUBO lightUBO;
     GLuint mBlackTex = 0;
@@ -275,6 +278,7 @@ class Window {
     void render();
     void renderSky();
     void renderShadowPass();
+    void renderReflection();
     void initMistNoise();
     void renderGeometryPass();
     void renderSSAO();

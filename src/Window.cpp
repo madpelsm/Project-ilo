@@ -167,6 +167,7 @@ void Window::sdlDie() {
     ssaoProg.deleteProgram();
     ssaoBlurProg.deleteProgram();
     shadowProg.deleteProgram();
+    reflectionProg.deleteProgram();
     if (mWaterVao)
         glDeleteVertexArrays(1, &mWaterVao);
     glDeleteBuffers(1, &mWaterVbo);
@@ -249,6 +250,7 @@ void Window::initGL() {
     buildProgram(ssaoProg, "./shaders/fullscreen.vert", "./shaders/ssao.frag");
     buildProgram(ssaoBlurProg, "./shaders/fullscreen.vert", "./shaders/ssaoBlur.frag");
     buildProgram(shadowProg, "./shaders/shadowDepth.vert", "./shaders/shadowDepth.frag");
+    buildProgram(reflectionProg, "./shaders/reflection.vert", "./shaders/reflection.frag");
 
     // Static sampler bindings.
     lightingProg.useProgram();
@@ -305,9 +307,15 @@ void Window::initGL() {
     godrayProg.useProgram();
     glUniform1i(glGetUniformLocation(godrayProg.getProgramID(), "uHdr"), 0);
     glUniform1i(glGetUniformLocation(godrayProg.getProgramID(), "gNormal"), 1);
+    reflectionProg.useProgram();
+    glUniform1i(glGetUniformLocation(reflectionProg.getProgramID(), "uShadowMap"), 6);
+    glUniform1i(glGetUniformLocation(reflectionProg.getProgramID(), "uMistNoise"), 9);
     waterProg.useProgram();
     glUniform1i(glGetUniformLocation(waterProg.getProgramID(), "gPosition"), 0);
+    glUniform1i(glGetUniformLocation(waterProg.getProgramID(), "uReflection"), 1);
     glUniform1i(glGetUniformLocation(waterProg.getProgramID(), "uMistNoise"), 2);
+    glUniform1f(glGetUniformLocation(waterProg.getProgramID(), "uReflStrength"), 1.0f);
+    glUniform1f(glGetUniformLocation(waterProg.getProgramID(), "uReflDistort"), 0.03f);
 
     // The Mere: a flat water plane (y=0) over the central basin.
     {
@@ -436,6 +444,20 @@ void Window::createFramebuffers() {
     shadowFarFBO.addDepthTexture(GL_DEPTH_COMPONENT24);
     shadowFarFBO.complete("shadowFarFBO");
 
+    // Planar water reflection: a reduced-res mirror of the world (HDR colour + its own
+    // depth). Half-res native, quarter-res on the web (it is rippled + fresnel-faded).
+#ifdef __EMSCRIPTEN__
+    int rdiv = 4;
+#else
+    int rdiv = 2;
+#endif
+    int rw = std::max(1, (mWidth + rdiv - 1) / rdiv), rh = std::max(1, (mHeight + rdiv - 1) / rdiv);
+    reflectionFBO.create(rw, rh);
+    reflectionFBO.addColor(GL_RGBA16F, GL_RGBA, GL_FLOAT, GL_LINEAR);
+    reflectionFBO.addDepth(GL_DEPTH_COMPONENT24);
+    reflectionFBO.setDrawBuffers();
+    reflectionFBO.complete("reflectionFBO");
+
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
@@ -450,6 +472,7 @@ void Window::destroyFramebuffers() {
     ssaoBlurFBO.destroy();
     shadowFBO.destroy();
     shadowFarFBO.destroy();
+    reflectionFBO.destroy();
     mBloomReady = false;
 }
 
@@ -899,6 +922,8 @@ void Window::run() {
         mMistStrength = 0.0f; // A/B: force the mist off
     if (const char *mi = std::getenv("ILO_MIST"))
         mMistStrength = (float)std::atof(mi); // force-thicken for preview
+    if (std::getenv("ILO_NOREFLECT"))
+        mNoReflect = true; // A/B: analytic sky reflection only
     if (const char *sd = std::getenv("ILO_SHADOWDEBUG"))
         mShadowDebug = std::atoi(sd); // 1 = grayscale shadow factor
 
@@ -2048,6 +2073,76 @@ void Window::renderShadowPass() {
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
+void Window::renderReflection() {
+    // Mirror the world about the y=0 lake plane into a reduced-res target; the water
+    // shader samples it for a true reflection of the trees/terrain/Heart, falling back to
+    // the analytic sky where there's no geometry (alpha mask). Lit cheaply (no point
+    // lights), with the same sun-shadow/fog/mist so the reflection matches the real world.
+    if (mNoReflect)
+        return;
+    glm::mat4 M = glm::scale(glm::mat4(1.0f), glm::vec3(1.0f, -1.0f, 1.0f));
+    mReflVP = projection() * mCamera.mView * M;
+
+    reflectionFBO.bind();
+    glViewport(0, 0, reflectionFBO.w, reflectionFBO.h);
+    glEnable(GL_DEPTH_TEST);
+    glDepthMask(GL_TRUE);
+    glDepthFunc(GL_LESS);
+    glDisable(GL_BLEND);
+    glClearColor(0.0f, 0.0f, 0.0f, 0.0f); // alpha 0 = "no geometry, use analytic sky"
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+    reflectionProg.useProgram();
+    GLuint pid = reflectionProg.getProgramID();
+    glm::vec3 eyeRel = mCamera.mPosition - mRenderOrigin;
+    glUniformMatrix4fv(glGetUniformLocation(pid, "uReflVP"), 1, GL_FALSE, glm::value_ptr(mReflVP));
+    glUniform3f(glGetUniformLocation(pid, "uOriginOffset"), mRenderOrigin.x, mRenderOrigin.y, mRenderOrigin.z);
+    glUniform2f(glGetUniformLocation(pid, "uWind"), 0.45f, 0.30f);
+    glUniform1f(glGetUniformLocation(pid, "time"), mTime);
+    glUniform3f(glGetUniformLocation(pid, "eyePos"), eyeRel.x, eyeRel.y, eyeRel.z);
+    glm::vec3 ambSky = mSky.ambient * glm::vec3(0.92f, 0.98f, 1.14f);
+    glm::vec3 ambGround = mSky.ambient * glm::vec3(1.12f, 0.96f, 0.72f) * 0.6f;
+    glUniform3f(glGetUniformLocation(pid, "uAmbient"), ambSky.x, ambSky.y, ambSky.z);
+    glUniform3f(glGetUniformLocation(pid, "uAmbientGround"), ambGround.x, ambGround.y, ambGround.z);
+    glUniform3f(glGetUniformLocation(pid, "uSunDir"), mSky.sunDir.x, mSky.sunDir.y, mSky.sunDir.z);
+    glUniform3f(glGetUniformLocation(pid, "uSunlight"), mSky.sunlight.x, mSky.sunlight.y, mSky.sunlight.z);
+    glUniformMatrix4fv(glGetUniformLocation(pid, "uLightVP"), 1, GL_FALSE, glm::value_ptr(mLightVP));
+    glUniform1f(glGetUniformLocation(pid, "uShadowBias"), 0.0008f);
+    glUniform1f(glGetUniformLocation(pid, "uShadowStrength"), mNoShadow ? 0.0f : mShadowStrength);
+    glUniform3f(glGetUniformLocation(pid, "uFogColor"), mSky.fogColor.x, mSky.fogColor.y, mSky.fogColor.z);
+    glUniform1f(glGetUniformLocation(pid, "uFogDensity"), mSky.fogDensity);
+    glUniform1f(glGetUniformLocation(pid, "uFogHeightFalloff"), mFogHeightFalloff);
+    glUniform1f(glGetUniformLocation(pid, "uFogBaseY"), mFogBaseY);
+    glUniform3f(glGetUniformLocation(pid, "uMistColor"), mSky.mistColor.x, mSky.mistColor.y, mSky.mistColor.z);
+    glUniform1f(glGetUniformLocation(pid, "uMistDensity"), mSky.mistDensity * mMistStrength);
+    glUniform1f(glGetUniformLocation(pid, "uMistBaseY"), mMistBaseY);
+    glUniform1f(glGetUniformLocation(pid, "uMistHeightFalloff"), mMistHeightFalloff);
+    glUniform2f(glGetUniformLocation(pid, "uMistOriginXZ"), mRenderOrigin.x, mRenderOrigin.z);
+    glUniform1f(glGetUniformLocation(pid, "uTime"), mTime);
+    glActiveTexture(GL_TEXTURE6);
+    glBindTexture(GL_TEXTURE_2D, shadowFBO.depth());
+    glActiveTexture(GL_TEXTURE9);
+    glBindTexture(GL_TEXTURE_2D, mNoiseTex.id);
+
+    // Mirroring flips winding: closed OBJ casters cull FRONT faces here, then restore.
+    glVertexAttrib4f(6, 1.0f, 0.0f, 0.0f, 0.0f);
+    glEnable(GL_CULL_FACE);
+    glFrontFace(GL_CW);
+    for (unsigned int i = 0; i < mGameObjects.size(); i++)
+        mGameObjects[i]->render(pid);
+    glFrontFace(GL_CCW);
+    glDisable(GL_CULL_FACE);
+    mTerrain.render(pid);
+    if (mProps)
+        mProps->render(pid);
+    for (auto &f : mFields)
+        f.render(pid);
+    mMushrooms.render(pid, mTime);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glViewport(0, 0, mWidth, mHeight); // restore full-res viewport for the main passes
+}
+
 void Window::renderGeometryPass() {
     glViewport(0, 0, mWidth, mHeight);
     gBuffer.bind();
@@ -2314,6 +2409,9 @@ void Window::renderWater() {
     glUniform2f(glGetUniformLocation(pid, "uMistOriginXZ"), 0.0f, 0.0f);
     glActiveTexture(GL_TEXTURE2);
     glBindTexture(GL_TEXTURE_2D, mNoiseTex.id);
+    glUniform1f(glGetUniformLocation(pid, "uReflStrength"), mNoReflect ? 0.0f : 1.0f);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, reflectionFBO.color(0));
     glUniform1i(glGetUniformLocation(pid, "uDimpleCount"), (int)mDimples.size());
     if (!mDimples.empty())
         glUniform4fv(glGetUniformLocation(pid, "uDimple"), (GLsizei)mDimples.size(), (const float *)mDimples.data());
@@ -2570,6 +2668,7 @@ void Window::render() {
     renderGeometryPass();
     renderSSAO();
     renderSky();
+    renderReflection();
     renderLightingPass();
     renderWater();
     renderGodrays();
