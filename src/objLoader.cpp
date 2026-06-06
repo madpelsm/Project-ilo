@@ -21,7 +21,7 @@ objectLoader::objectLoader(std::string _inputFile) {
         // Loop over faces(polygon)
         size_t index_offset = 0;
         for (size_t f = 0; f < shapes[s].mesh.num_face_vertices.size(); f++) {
-            int fv = shapes[s].mesh.num_face_vertices[f];
+            size_t fv = shapes[s].mesh.num_face_vertices[f];
 
             // Loop over vertices in the face.
             for (size_t v = 0; v < fv; v++) {
@@ -32,21 +32,24 @@ objectLoader::objectLoader(std::string _inputFile) {
                 float vx = attrib.vertices[3 * idx.vertex_index + 0];
                 float vy = attrib.vertices[3 * idx.vertex_index + 1];
                 float vz = attrib.vertices[3 * idx.vertex_index + 2];
-                float nx = attrib.normals[3 * idx.normal_index + 0];
-                float ny = attrib.normals[3 * idx.normal_index + 1];
-                float nz = attrib.normals[3 * idx.normal_index + 2];
-                /*float tx = attrib.texcoords[2 * idx.texcoord_index + 0];
-        float ty = attrib.texcoords[2 * idx.texcoord_index + 1];*/
+                // Normals are optional in an OBJ; fall back to up when absent.
+                float nx = 0.0f, ny = 1.0f, nz = 0.0f;
+                if (idx.normal_index >= 0) {
+                    nx = attrib.normals[3 * idx.normal_index + 0];
+                    ny = attrib.normals[3 * idx.normal_index + 1];
+                    nz = attrib.normals[3 * idx.normal_index + 2];
+                }
                 float c1 = 1, c2 = 1, c3 = 1, shininess = 32.0f, specStrength = 1.0f, ambientAmount = 0;
-                if (f < shapes[s].mesh.material_ids.size() && shapes[s].mesh.material_ids.size() >= 0) {
-                    c1 = materials[shapes[s].mesh.material_ids[f]].diffuse[0];
-                    c2 = materials[shapes[s].mesh.material_ids[f]].diffuse[1];
-                    c3 = materials[shapes[s].mesh.material_ids[f]].diffuse[2];
-                    specStrength = materials[shapes[s].mesh.material_ids[f]].specular[0];
+                int mid = (f < shapes[s].mesh.material_ids.size()) ? shapes[s].mesh.material_ids[f] : -1;
+                if (mid >= 0 && mid < (int)materials.size()) {
+                    c1 = materials[mid].diffuse[0];
+                    c2 = materials[mid].diffuse[1];
+                    c3 = materials[mid].diffuse[2];
+                    specStrength = materials[mid].specular[0];
                     // Per-material ambient is dropped; the night scene uses a single global
                     // moonlight ambient in the lighting pass instead.
                     ambientAmount = 0.0f;
-                    float shiny_temp = materials[shapes[s].mesh.material_ids[f]].shininess;
+                    float shiny_temp = materials[mid].shininess;
                     shininess = (1.0f < shiny_temp) ? shiny_temp : 1.0f;
                 }
                 // Store normals with their true orientation. (The old loader negated them

@@ -17,7 +17,7 @@ class Shader {
     bool isLoaded();
 
   private:
-    unsigned int shaderID;
-    int shaderType;
-    bool loaded;
+    unsigned int shaderID = 0;
+    int shaderType = 0;
+    bool loaded = false;
 };

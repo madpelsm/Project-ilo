@@ -35,7 +35,4 @@ class Camera {
 
     glm::mat4 view() const { return mView; }
     glm::vec3 position() const { return mPosition; }
-
-    void uploadCameraInfo(int shaderProgramID);
-    void setViewPos(int shaderProgramID);
 };

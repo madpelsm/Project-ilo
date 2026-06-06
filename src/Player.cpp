@@ -112,14 +112,16 @@ void Player::render(int shaderProgramID) {
         // Orphan then refill to avoid stalling on the previous frame's draw.
         glBindBuffer(GL_ARRAY_BUFFER, mInstanceVBO);
         glBufferData(GL_ARRAY_BUFFER, mOffsets.size() * sizeof(glm::vec3), nullptr, GL_STREAM_DRAW);
-        glBufferData(GL_ARRAY_BUFFER, mOffsets.size() * sizeof(glm::vec3), &mOffsets[0], GL_STREAM_DRAW);
+        glBufferSubData(GL_ARRAY_BUFFER, 0, mOffsets.size() * sizeof(glm::vec3), &mOffsets[0]);
         glBindBuffer(GL_ARRAY_BUFFER, mTintVBO);
         glBufferData(GL_ARRAY_BUFFER, mTintEmissive.size() * sizeof(glm::vec4), nullptr, GL_STREAM_DRAW);
-        glBufferData(GL_ARRAY_BUFFER, mTintEmissive.size() * sizeof(glm::vec4), &mTintEmissive[0], GL_STREAM_DRAW);
+        glBufferSubData(GL_ARRAY_BUFFER, 0, mTintEmissive.size() * sizeof(glm::vec4), &mTintEmissive[0]);
         glBindBuffer(GL_ARRAY_BUFFER, 0);
         mOffsetsChanged = false;
     }
+    glm::mat3 normalMatrix = glm::transpose(glm::inverse(glm::mat3(mTransformation)));
     glUniformMatrix4fv(glGetUniformLocation(shaderProgramID, "model"), 1, GL_FALSE, glm::value_ptr(mTransformation));
+    glUniformMatrix3fv(glGetUniformLocation(shaderProgramID, "normalMatrix"), 1, GL_FALSE, glm::value_ptr(normalMatrix));
     glUniform1f(glGetUniformLocation(shaderProgramID, "grassWave"), mGrassWave);
     glBindVertexArray(mVaoPlayer);
     glDrawElementsInstanced(GL_TRIANGLES, mVertices2.size(), GL_UNSIGNED_INT, 0, (GLsizei)mOffsets.size());

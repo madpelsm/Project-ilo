@@ -3,8 +3,8 @@
 #include <glad/glad.h>
 class ShaderProgram {
   public:
-    GLuint programID;
-    bool bLinked;
+    GLuint programID = 0;
+    bool bLinked = false;
 
     ShaderProgram();
     ~ShaderProgram();

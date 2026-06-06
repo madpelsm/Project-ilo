@@ -78,6 +78,10 @@ void Window::sdlDie() {
     geometryProg.deleteProgram();
     brightProg.deleteProgram();
     blurProg.deleteProgram();
+    if (glContext) {
+        SDL_GL_DeleteContext(glContext);
+        glContext = nullptr;
+    }
     SDL_DestroyWindow(mSDLwindow);
     SDL_Quit();
 }
@@ -262,10 +266,14 @@ void Window::run() {
         if (!shotPath)
             checkEvents();
         update();
-        render();
 
-        if (shotPath && ++frame >= shotFrame) {
-            ilo::savePPM(shotPath, mWidth, mHeight);
+        bool capture = (shotPath && ++frame >= shotFrame);
+        if (capture) {
+            mPendingShot = true; // render() reads the back buffer before SwapWindow
+            mShotPath = shotPath;
+        }
+        render();
+        if (capture) {
             std::cout << "Saved screenshot to " << shotPath << " (" << mWidth << "x" << mHeight << ")" << std::endl;
             break;
         }
@@ -452,7 +460,7 @@ void Window::update() {
             float drain = FUEL_DRAIN + (mSprinting ? SPRINT_DRAIN_EXTRA : 0.0f);
             mFuelW -= drain * mDt;
         }
-        if (mFuelW <= 0.0f) {
+        if (!mFreezeFuel && mFuelW <= 0.0f) {
             mFuelW = 0.0f;
             mState = GameState::Lost;
         }
@@ -682,7 +690,7 @@ void Window::renderHud() {
     char buf[80];
 
     // Firefly counter (top-left).
-    std::snprintf(buf, sizeof(buf), "FIREFLIES  %d / %d", mCollected, mTarget);
+    std::snprintf(buf, sizeof(buf), "FIREFLIES  %d / %d", std::min(mCollected, mTarget), mTarget);
     mHud.text(0.04f, 0.05f, 0.040f, buf, warm);
 
     // Warmth meter (bottom-left).
@@ -713,7 +721,7 @@ void Window::renderHud() {
     if (mState == GameState::Won) {
         mHud.rect(0, 0, 1, 1, glm::vec4(0.10f, 0.15f, 0.10f, 0.55f));
         mHud.textCentered(0.5f, 0.34f, 0.07f, "THE GROVE AWAKENS", glm::vec4(0.8f, 1.0f, 0.7f, 1.0f));
-        std::snprintf(buf, sizeof(buf), "FIREFLIES GATHERED  %d / %d", mCollected, mTarget);
+        std::snprintf(buf, sizeof(buf), "FIREFLIES GATHERED  %d / %d", std::min(mCollected, mTarget), mTarget);
         mHud.textCentered(0.5f, 0.46f, 0.040f, buf, warm);
         mHud.textCentered(0.5f, 0.56f, 0.035f, "PRESS [R] TO PLAY AGAIN", warm);
     }
@@ -734,6 +742,10 @@ void Window::render() {
     renderComposite();
     renderHud();
 
+    if (mPendingShot) { // capture the freshly-rendered back buffer before presenting
+        ilo::savePPM(mShotPath, mWidth, mHeight);
+        mPendingShot = false;
+    }
     SDL_GL_SwapWindow(mSDLwindow);
     float currentTime = SDL_GetTicks();
     frames++;

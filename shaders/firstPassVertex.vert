@@ -10,6 +10,7 @@ layout (location = 5) in vec4 instanceTintEmissive; // rgb = colour tint, a = em
 uniform mat4 persp;
 uniform mat4 model;
 uniform mat4 view;
+uniform mat3 normalMatrix; // transpose(inverse(mat3(model))), computed once on the CPU
 uniform float time;
 uniform float grassWave;   // 1.0 for the forest (animate low verts), 0.0 otherwise
 
@@ -30,7 +31,7 @@ void main() {
     gl_Position = persp * view * worldPos;
 
     vWorldPos = worldPos.xyz;
-    vNormal = mat3(transpose(inverse(model))) * inNormal;
+    vNormal = normalMatrix * inNormal;
     vAlbedo = inColor * instanceTintEmissive.rgb;
     vMtlProps = inMtlProps;
     vEmissive = instanceTintEmissive.a;

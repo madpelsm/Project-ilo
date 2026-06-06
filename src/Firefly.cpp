@@ -260,15 +260,17 @@ void FireflySystem::render(int shaderProgramID, float time) {
 
     glBindBuffer(GL_ARRAY_BUFFER, mInstVbo);
     glBufferData(GL_ARRAY_BUFFER, offsets.size() * sizeof(glm::vec3), nullptr, GL_STREAM_DRAW);
-    glBufferData(GL_ARRAY_BUFFER, offsets.size() * sizeof(glm::vec3), offsets.data(), GL_STREAM_DRAW);
+    glBufferSubData(GL_ARRAY_BUFFER, 0, offsets.size() * sizeof(glm::vec3), offsets.data());
     glBindBuffer(GL_ARRAY_BUFFER, mTintVbo);
     glBufferData(GL_ARRAY_BUFFER, tints.size() * sizeof(glm::vec4), nullptr, GL_STREAM_DRAW);
-    glBufferData(GL_ARRAY_BUFFER, tints.size() * sizeof(glm::vec4), tints.data(), GL_STREAM_DRAW);
+    glBufferSubData(GL_ARRAY_BUFFER, 0, tints.size() * sizeof(glm::vec4), tints.data());
     glBindBuffer(GL_ARRAY_BUFFER, 0);
 
     // Motes are tiny double-sided diamonds; skip face culling to dodge winding issues.
     glm::mat4 ident = glm::mat4(1.0f);
+    glm::mat3 ident3 = glm::mat3(1.0f);
     glUniformMatrix4fv(glGetUniformLocation(shaderProgramID, "model"), 1, GL_FALSE, &ident[0][0]);
+    glUniformMatrix3fv(glGetUniformLocation(shaderProgramID, "normalMatrix"), 1, GL_FALSE, &ident3[0][0]);
     glUniform1f(glGetUniformLocation(shaderProgramID, "grassWave"), 0.0f);
     glDisable(GL_CULL_FACE);
     glBindVertexArray(mVao);

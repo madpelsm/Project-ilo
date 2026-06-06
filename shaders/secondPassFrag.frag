@@ -86,7 +86,9 @@ void main() {
         vec3 L = toL / d;
         vec3 H = normalize(L + V);
         float diff = max(dot(N, L), 0.0);
-        float spec = pow(max(dot(N, H), 0.0), shininess) * specStrength;
+        // Gate specular by the diffuse term so highlights cannot leak past the
+        // terminator onto surfaces the light does not actually reach.
+        float spec = smoothstep(0.0, 0.05, dot(N, L)) * pow(max(dot(N, H), 0.0), shininess) * specStrength;
         float rr = d / r;
         float window = clamp(1.0 - rr * rr * rr * rr, 0.0, 1.0); // Karis windowed inverse-square
         float att = (window * window) / (d2 + 1.0) * lights[i].colorIntensity.w;

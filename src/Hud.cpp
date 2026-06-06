@@ -72,6 +72,7 @@ void Hud::destroy() {
         glDeleteTextures(1, &mFontTex);
     if (mWhiteTex)
         glDeleteTextures(1, &mWhiteTex);
+    mProg.deleteProgram();
     mVao = mVbo = mFontTex = mWhiteTex = 0;
 }
 
@@ -136,7 +137,7 @@ void Hud::drawBatch(std::vector<V> &buf, GLuint tex) {
     glBindVertexArray(mVao);
     glBindBuffer(GL_ARRAY_BUFFER, mVbo);
     glBufferData(GL_ARRAY_BUFFER, buf.size() * sizeof(V), nullptr, GL_STREAM_DRAW);
-    glBufferData(GL_ARRAY_BUFFER, buf.size() * sizeof(V), buf.data(), GL_STREAM_DRAW);
+    glBufferSubData(GL_ARRAY_BUFFER, 0, buf.size() * sizeof(V), buf.data());
     glDrawArrays(GL_TRIANGLES, 0, (GLsizei)buf.size());
     glBindVertexArray(0);
 }

@@ -44,14 +44,18 @@ class Window {
     float mDt = 0.0f;
     float mTime = 0.0f; // accumulated game time fed to shaders
 
+    // headless capture (read the back buffer before presenting)
+    bool mPendingShot = false;
+    std::string mShotPath;
+
   public:
     Camera mCamera;
     SDL_Window *mSDLwindow = nullptr;
     SDL_GLContext glContext;
     SDL_Event event;
 
-    // shader programs
-    ShaderProgram geometryProg, lightingProg, brightProg, blurProg, compositeProg, hudProg;
+    // shader programs (HUD owns its own program)
+    ShaderProgram geometryProg, lightingProg, brightProg, blurProg, compositeProg;
 
     // render targets + helpers
     ilo::Framebuffer gBuffer, hdrFBO, bloomA, bloomB;

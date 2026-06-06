@@ -1,6 +1,5 @@
-cmake_minimum_required(VERSION 2.6)
+cmake_minimum_required(VERSION 3.10)
 project(Ilo)
-cmake_policy(SET CMP0054 NEW)
 
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${CMAKE_SOURCE_DIR}/cmake/Modules/)
 
@@ -17,15 +16,16 @@ if (WIN32)
     add_definitions(-DNOMINMAX)
 endif()
 
+set(OpenGL_GL_PREFERENCE GLVND)
 find_package(OpenGL REQUIRED)
 find_package(SDL2 REQUIRED)
 find_package(GLM REQUIRED)
 
 include_directories(glad/include/)
-include_directories(${SDL2_INCLUDE_DIR}/SDL2)
+include_directories(${SDL2_INCLUDE_DIR})
 include_directories(${GLM_INCLUDE_DIR})
 
-file(GLOB ILO_SRC_FILES "./src/*.cpp")
+file(GLOB ILO_SRC_FILES CONFIGURE_DEPENDS "./src/*.cpp")
 
 set(ILO_SRC_FILES ${ILO_SRC_FILES} src/tiny_obj_loader.cc)
 set(GLAD_SRC_FILES glad/src/glad.c)

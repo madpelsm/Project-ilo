@@ -3,13 +3,9 @@
 ShaderProgram::ShaderProgram() {
 }
 ShaderProgram::~ShaderProgram() {
-    if (!bLinked)
-        return;
-    bLinked = false;
-    glDeleteProgram(programID);
+    deleteProgram();
 }
 bool ShaderProgram::linkProgram() {
-    glLinkProgram(programID);
     GLint program = programID;
     glLinkProgram(program);
 
@@ -34,6 +30,7 @@ bool ShaderProgram::linkProgram() {
         // Exit with failure.
         return 0;
     }
+    bLinked = true;
     return 1;
 }
 void ShaderProgram::useProgram() {
@@ -54,5 +51,8 @@ int ShaderProgram::getProgramID() {
 }
 
 void ShaderProgram::deleteProgram() {
-    glDeleteProgram(programID);
+    if (programID)
+        glDeleteProgram(programID);
+    programID = 0;
+    bLinked = false;
 }

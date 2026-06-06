@@ -4,7 +4,12 @@
 Shader::Shader() {
 }
 bool Shader::loadShader(std::string pos, int shaderType) {
+    loaded = false;
     std::ifstream t(pos);
+    if (!t.is_open()) {
+        std::cout << "Shader file not found: " << pos << std::endl;
+        return false;
+    }
     std::string str((std::istreambuf_iterator<char>(t)), std::istreambuf_iterator<char>());
     shaderID = glCreateShader(shaderType);
     const char *c_str = str.c_str();

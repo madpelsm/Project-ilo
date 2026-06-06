@@ -59,12 +59,3 @@ void Camera::moveUp(float dist) {
     mPosition.y = std::max(mMinY, std::min(mMaxY, mPosition.y + dist));
     update();
 }
-
-void Camera::uploadCameraInfo(int shaderProgramID) {
-    int loc = glGetUniformLocation(shaderProgramID, "view");
-    glProgramUniformMatrix4fv(shaderProgramID, loc, 1, GL_FALSE, glm::value_ptr(mView));
-}
-
-void Camera::setViewPos(int shaderProgramID) {
-    glUniform3f(glGetUniformLocation(shaderProgramID, "eyePos"), mPosition.x, mPosition.y, mPosition.z);
-}
