@@ -1,5 +1,6 @@
 #pragma once
 #include "Camera.h"
+#include "Firefly.h"
 #include "GameObject.h"
 #include "Player.h"
 #include "Render.h"
@@ -55,12 +56,14 @@ class Window {
     ilo::ScreenTri tri;
     ilo::LightUBO lightUBO;
     GLuint mBlackTex = 0;
+    GLuint mBloomTex = 0; // final blurred bloom texture for the composite
     bool mBloomReady = false;
 
     // world
     std::vector<Player *> mGameObjects;
     Player *mForest = nullptr;
     Player *mHeart = nullptr;
+    FireflySystem mFireflies;
 
     // lights packed each frame; [0] is the lantern
     std::vector<ilo::OmniLightGPU> mLights;

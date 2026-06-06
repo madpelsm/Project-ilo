@@ -14,6 +14,7 @@ const float SPRINT_SPEED = 6.5f;
 const float FLY_VERT_SPEED = 3.0f;
 const float HARD_BOUND = 24.0f; // clamp camera to the play area
 const float DT_CLAMP = 0.05f;
+const float COLLECT_RADIUS = 1.8f;
 
 void buildProgram(ShaderProgram &prog, const char *vsPath, const char *fsPath) {
     Shader vs, fs;
@@ -54,6 +55,7 @@ void Window::sdlDie() {
     for (unsigned int i = 0; i < mGameObjects.size(); i++) {
         mGameObjects[i]->cleanup();
     }
+    mFireflies.destroy();
     destroyFramebuffers();
     tri.destroy();
     lightUBO.destroy();
@@ -206,6 +208,7 @@ void Window::initAssets() {
     for (unsigned int i = 0; i < mGameObjects.size(); i++) {
         mGameObjects[i]->initGL();
     }
+    mFireflies.init(60);
 }
 
 void Window::run() {
@@ -220,6 +223,8 @@ void Window::run() {
     const char *camEnv = std::getenv("ILO_CAM");
     int shotFrame = shotFrameEnv ? std::atoi(shotFrameEnv) : 90;
     int frame = 0;
+    if (const char *fuelEnv = std::getenv("ILO_FUEL"))
+        mFuel = (float)std::atof(fuelEnv); // testing knob to preview the lantern at a given warmth
     if (shotPath && camEnv) {
         float x, y, z, yaw, pitch;
         if (std::sscanf(camEnv, "%f,%f,%f,%f,%f", &x, &y, &z, &yaw, &pitch) == 5) {
@@ -326,12 +331,22 @@ void Window::packLights() {
     lantern.colorIntensity[3] = li;
     mLights.push_back(lantern);
 
-    // (firefly + Heart lights are appended in later slices)
+    // Firefly lights (nearest motes to the camera), capped to keep the loop cheap.
+    int cap = mLowSpec ? 14 : 46;
+    mFireflies.appendLights(mLights, mTime, mCamera.mPosition, cap);
+
+    // (Heart light appended in a later slice)
 
     lightUBO.upload(mLights.data(), (int)mLights.size());
 }
 
 void Window::update() {
+    if (mState == GameState::Playing) {
+        float fuelGained = 0.0f;
+        int got = mFireflies.update(mDt, mTime, mCamera.mPosition, COLLECT_RADIUS, fuelGained);
+        if (got > 0)
+            mCollected += got;
+    }
     packLights();
     for (unsigned int i = 0; i < mGameObjects.size(); i++) {
         mGameObjects[i]->update();
@@ -360,6 +375,7 @@ void Window::renderGeometryPass() {
     for (unsigned int i = 0; i < mGameObjects.size(); i++) {
         mGameObjects[i]->render(pid);
     }
+    mFireflies.render(pid, mTime); // disables cull internally; drawn last
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
@@ -404,7 +420,42 @@ void Window::renderLightingPass() {
 }
 
 void Window::renderBloom() {
-    // implemented in the bloom slice; for now bloom stays disabled
+    if (!mBloomReady)
+        return;
+    glDisable(GL_DEPTH_TEST);
+    glDepthMask(GL_FALSE);
+    glDisable(GL_BLEND);
+    glDisable(GL_CULL_FACE);
+    glViewport(0, 0, bloomA.w, bloomA.h);
+
+    // Bright-pass: extract the bright parts of the HDR scene into the half-res buffer.
+    brightProg.useProgram();
+    GLuint bp = brightProg.getProgramID();
+    glUniform1f(glGetUniformLocation(bp, "uThreshold"), 1.0f);
+    glUniform1f(glGetUniformLocation(bp, "uSoftKnee"), 0.5f);
+    bloomA.bind();
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, hdrFBO.color(0));
+    tri.draw();
+
+    // Separable Gaussian, ping-ponging between the two half-res buffers.
+    blurProg.useProgram();
+    GLuint blp = blurProg.getProgramID();
+    int draws = mLowSpec ? 4 : 10;
+    bool horizontal = true;
+    ilo::Framebuffer *src = &bloomA;
+    ilo::Framebuffer *dst = &bloomB;
+    for (int i = 0; i < draws; ++i) {
+        dst->bind();
+        glUniform1i(glGetUniformLocation(blp, "horizontal"), horizontal ? 1 : 0);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, src->color(0));
+        tri.draw();
+        std::swap(src, dst);
+        horizontal = !horizontal;
+    }
+    mBloomTex = src->color(0); // last buffer written
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
 void Window::renderComposite() {
@@ -419,9 +470,9 @@ void Window::renderComposite() {
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, hdrFBO.color(0));
     glActiveTexture(GL_TEXTURE1);
-    glBindTexture(GL_TEXTURE_2D, mBlackTex); // no bloom yet
+    glBindTexture(GL_TEXTURE_2D, (mBloomReady && mBloomTex) ? mBloomTex : mBlackTex);
     glUniform1f(glGetUniformLocation(pid, "uExposure"), mExposure);
-    glUniform1f(glGetUniformLocation(pid, "uBloomIntensity"), 0.0f);
+    glUniform1f(glGetUniformLocation(pid, "uBloomIntensity"), (mBloomReady && mBloomTex) ? mBloomIntensity : 0.0f);
     glUniform1f(glGetUniformLocation(pid, "uVignetteMax"), mVignetteMax);
     glUniform1f(glGetUniformLocation(pid, "uFuel"), mFuel);
     tri.draw();
